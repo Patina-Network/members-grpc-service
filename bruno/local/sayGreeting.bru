@@ -1,0 +1,24 @@
+meta {
+  name: sayGreeting
+  type: grpc
+  seq: 3
+}
+
+grpc {
+  url: localhost:50051
+  method: /helloworld.GreeterService/sayGreeting
+  body: grpc
+  auth: none
+  methodType: unary
+}
+
+body:grpc {
+  name: message 1
+  content: '''
+    {
+      "sender_name": "milly bobby brown",
+      "recipient_name": "john wick",
+      "greeting": "how r u doing"
+    }
+  '''
+}

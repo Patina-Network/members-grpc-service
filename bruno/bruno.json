@@ -1,0 +1,9 @@
+{
+  "version": "1",
+  "name": "Patina-Network/hello-world-grpc-service/bruno",
+  "type": "collection",
+  "ignore": [
+    "node_modules",
+    ".git"
+  ]
+}

@@ -1,0 +1,4 @@
+.git
+target
+.github/scripts/node_modules
+.DS_Store

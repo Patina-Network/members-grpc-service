@@ -1,0 +1,22 @@
+meta {
+  name: echoHello
+  type: grpc
+  seq: 3
+}
+
+grpc {
+  url: grpcs://stg.hello-world-grpc-service.vpn.patinanetwork.org:50051
+  method: /helloworld.GreeterService/echoHello
+  body: grpc
+  auth: none
+  methodType: unary
+}
+
+body:grpc {
+  name: message 1
+  content: '''
+    {
+      "name": "john wick"
+    }
+  '''
+}

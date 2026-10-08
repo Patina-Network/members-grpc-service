@@ -1,0 +1,22 @@
+meta {
+  name: echoHello (non-empty name, fails)
+  type: grpc
+  seq: 3
+}
+
+grpc {
+  url: localhost:50051
+  method: /helloworld.GreeterService/echoHello
+  body: grpc
+  auth: none
+  methodType: unary
+}
+
+body:grpc {
+  name: message 1
+  content: '''
+    {
+      "name": ""
+    }
+  '''
+}

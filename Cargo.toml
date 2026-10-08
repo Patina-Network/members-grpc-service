@@ -1,0 +1,30 @@
+[package]
+name = "hello-world-grpc-service"
+version = "1.0.0"
+edition = "2024"
+
+[dependencies]
+tonic = "0.14.6"
+tonic-health = "0.14.6"
+tonic-reflection = "0.14.6"
+tonic-middleware = "0.4.1"
+prost = "0.14.4"
+prost-types = "0.14.4"
+tonic-prost = "0.14.6"
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread"] }
+anyhow = "1.0.104"
+thiserror = "2.0.20"
+jiff = "0.2.37"
+tower-http = { version = "0.7.1", features = ["catch-panic"] }
+axum = { version = "0.8.9" }
+metrics = "0.24.6"
+metrics-exporter-prometheus = "0.18.3"
+metrics-process = "2.4.3"
+bytes = "1.12.1"
+http-body = "1.1.0"
+pin-project-lite = "0.2.17"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["json", "env-filter"] }
+
+[build-dependencies]
+tonic-prost-build = "0.14"

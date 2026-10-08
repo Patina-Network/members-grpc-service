@@ -1,0 +1,152 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/SchemaStore/schemastore/refs/heads/master/src/schemas/json/github-workflow.json
+name: CI
+run-name: Running continuous integration on ${{ github.actor }}'s commits
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+concurrency:
+  group: ci-cd-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup pipeline
+        uses: tahminator/pipeline/actions/setup@8601c1c7d28289879772574a60fe817fb953eeee # 1.0.93
+        with:
+          SECRETS: ${{ toJSON(secrets) }}
+          INSTALL_JUST: true
+          INSTALL_PROTOC: true
+          INSTALL_PNPM: true
+          PNPM_VERSION: 11.11.0
+          CARGO_PACKAGES: |
+            cargo-tarpaulin@0.37.2
+
+      - name: Run Tests
+        uses: ./.github/composite/test
+
+  buildUploadClientsImageStaging:
+    name: Build and upload beta gRPC clients
+    runs-on: ubuntu-latest
+    needs: [test]
+
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Pipeline
+        uses: tahminator/pipeline/actions/setup@8601c1c7d28289879772574a60fe817fb953eeee # 1.0.93
+        with:
+          SECRETS: ${{ toJSON(secrets) }}
+          HEADSCALE_ADDRESS: ${{ secrets.HEADSCALE_ADDRESS }}
+          HEADSCALE_USER: ${{ secrets.HEADSCALE_USER }}
+          HEADSCALE_PREAUTHKEY: ${{ secrets.HEADSCALE_PREAUTHKEY }}
+          INSTALL_PROTO_DEPENDENCIES: true
+
+      - name: Run Tests
+        run: cargo test
+
+      - name: Run script
+        run: bun run .github/scripts/src/build-clients/beta --sha=${{ github.event.pull_request.head.sha }} --prId=${{ github.event.pull_request.number }}
+
+  buildUploadServerImageStaging:
+    name: Build and upload staging gRPC server (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    needs: [test]
+
+    if: github.event_name == 'pull_request'
+
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Pipeline
+        uses: tahminator/pipeline/actions/setup@8601c1c7d28289879772574a60fe817fb953eeee # 1.0.93
+        with:
+          SECRETS: ${{ toJSON(secrets) }}
+          HEADSCALE_ADDRESS: ${{ secrets.HEADSCALE_ADDRESS }}
+          HEADSCALE_USER: ${{ secrets.HEADSCALE_USER }}
+          HEADSCALE_PREAUTHKEY: ${{ secrets.HEADSCALE_PREAUTHKEY }}
+          INSTALL_PROTO_DEPENDENCIES: true
+
+      - name: Run Tests
+        run: cargo test
+
+      - name: Run script
+        run: bun run .github/scripts/src/build-server/staging --sha=${{ github.event.pull_request.head.sha }} --prId=${{ github.event.pull_request.number }} --arch=${{ matrix.arch }}
+
+  buildUploadServerImage:
+    name: Build gRPC server Docker image and deploy to Docker Hub (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    needs: [test]
+
+    if: github.ref_name == 'main'
+
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Setup pipeline
+        uses: tahminator/pipeline/actions/setup@8601c1c7d28289879772574a60fe817fb953eeee # 1.0.93
+        with:
+          SECRETS: ${{ toJSON(secrets) }}
+
+      - name: Build image
+        uses: ./.github/composite/build-server
+        with:
+          ARCH: ${{ matrix.arch }}
+
+  createTag:
+    name: Create new tag
+    runs-on: ubuntu-latest
+    needs: [buildUploadServerImage]
+
+    if: github.ref_name == 'main'
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup pipeline
+        uses: tahminator/pipeline/actions/setup@8601c1c7d28289879772574a60fe817fb953eeee # 1.0.93
+        with:
+          SECRETS: ${{ toJSON(secrets) }}
+
+      - name: Create new tag
+        uses: ./.github/composite/create-tag

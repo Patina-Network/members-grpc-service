@@ -1,0 +1,22 @@
+meta {
+  name: getGreetingsByName (getAll)
+  type: grpc
+  seq: 5
+}
+
+grpc {
+  url: grpcs://stg.hello-world-grpc-service.vpn.patinanetwork.org:50051
+  method: /helloworld.GreeterService/getGreetingsByName
+  body: grpc
+  auth: none
+  methodType: unary
+}
+
+body:grpc {
+  name: message 1
+  content: '''
+    {
+      "recipient_name": ""
+    }
+  '''
+}

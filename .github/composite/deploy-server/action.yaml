@@ -1,0 +1,14 @@
+name: Deploy server
+description: Deploys server image to k8s cluster
+
+inputs:
+  VERSION:
+    description: "For example, '1.2.34'"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Deploy service
+      shell: bash
+      run: bun run .github/scripts/src/deploy-server --newTagVersion "${{ inputs.VERSION }}"

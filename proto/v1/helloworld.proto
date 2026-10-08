@@ -1,0 +1,55 @@
+syntax = "proto3";
+package helloworld;
+
+import "google/protobuf/timestamp.proto";
+
+// you must fill all of these out in our services
+option go_package = "patinanetwork.org/grpc/hello-world-grpc-service;helloworld";
+option java_package = "org.patinanetwork.grpc.helloworld.v1";
+option java_multiple_files = true;
+
+service GreeterService {
+  // Returns back a greeting with the same given in the request
+  rpc echoHello(EchoHelloRequest) returns (EchoHelloResponse);
+
+  // send a greeting to a name.
+  rpc sayGreeting(SayGreetingRequest) returns (SayGreetingResponse);
+  // Returns back all the greetings attaches to a specific name (if no name is
+  // provided, will return all greetings).
+  rpc getGreetingsByName(GetGreetingsByNameRequest) returns (GreetingsResponse);
+}
+
+message EchoHelloResponse { string response = 1; }
+message EchoHelloRequest { string name = 1; }
+
+message GetGreetingsByNameRequest {
+  // by default, all fields are optional in proto3+.
+  // if not set, it will be set to it's zero-value ("", 0, etc)
+  // this explicit `optional` keyword allows us to check if it was explicitly
+  // set by the client or not.
+  //
+  // you can add `optional` to any field at any time, even after it's initial
+  // creation.
+  optional string recipient_name = 1;
+}
+
+message SayGreetingRequest {
+  string sender_name = 1;
+  string recipient_name = 2;
+  string greeting = 3;
+}
+
+message GreetingResponse {
+  uint32 id = 1;
+  string message = 2;
+  string sender_name = 3;
+  string recipient_name = 4;
+  google.protobuf.Timestamp receivedAt = 5;
+}
+
+message GreetingsResponse { repeated GreetingResponse replies = 1; }
+
+// avoid using google.protobuf.Empty
+// it can never be removed from the given method again.
+// you will have to move to a new method and migrate clients to new method.
+message SayGreetingResponse {}

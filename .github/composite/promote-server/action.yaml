@@ -1,0 +1,21 @@
+name: Promote server image to tag
+description: Finds a Docker image by the given tag and promotes it to the new tag.
+
+inputs:
+  ORIGINAL_TAG:
+    description: "For example: abc1234"
+    required: true
+  NEW_GITHUB_TAG:
+    description: "For example: 1.2.34"
+    required: true
+  ARCH:
+    description: "Architecture to promote (amd64 or arm64). Must match the runner's architecture."
+    required: false
+    default: amd64
+
+runs:
+  using: composite
+  steps:
+    - name: Promote tag
+      shell: bash
+      run: bun run .github/scripts/src/promote-server --originalTag "${{ inputs.ORIGINAL_TAG }}" --newGithubTag "${{ inputs.NEW_GITHUB_TAG }}" --arch "${{ inputs.ARCH }}"

@@ -1,0 +1,90 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/SchemaStore/schemastore/refs/heads/master/src/schemas/json/github-workflow.json
+name: CD
+run-name: Running continuous deployment on ${{ github.actor }}'s commits
+
+permissions:
+  contents: read
+
+on:
+  push:
+    tags:
+      - "*"
+
+concurrency:
+  group: cd
+  cancel-in-progress: false
+
+jobs:
+  promoteImage:
+    name: Promote Docker image (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # so we can reach latest commit before tag
+          fetch-depth: 2
+
+      - name: Setup Pipeline
+        uses: tahminator/pipeline/actions/setup@8601c1c7d28289879772574a60fe817fb953eeee # 1.0.93
+        with:
+          SECRETS: ${{ toJSON(secrets) }}
+
+      - name: Get Parent SHA
+        id: prev
+        run: echo "sha=$(git rev-parse --short=8 ${{ github.sha }}^1)" >> $GITHUB_OUTPUT
+
+      - name: Promote image
+        uses: ./.github/composite/promote-server
+        with:
+          ORIGINAL_TAG: ${{ steps.prev.outputs.sha }}
+          NEW_GITHUB_TAG: ${{ github.ref_name }}
+          ARCH: ${{ matrix.arch }}
+
+  deployToProduction:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [promoteImage]
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Pipeline
+        uses: tahminator/pipeline/actions/setup@8601c1c7d28289879772574a60fe817fb953eeee # 1.0.93
+        with:
+          SECRETS: ${{ toJSON(secrets) }}
+
+      - name: Deploy Server
+        uses: ./.github/composite/deploy-server
+        with:
+          VERSION: ${{ github.ref_name }}
+
+  buildAndDeployClients:
+    name: Build and deploy gRPC clients
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Pipeline
+        uses: tahminator/pipeline/actions/setup@8601c1c7d28289879772574a60fe817fb953eeee # 1.0.93
+        with:
+          SECRETS: ${{ toJSON(secrets) }}
+          HEADSCALE_ADDRESS: ${{ secrets.HEADSCALE_ADDRESS }}
+          HEADSCALE_USER: ${{ secrets.HEADSCALE_USER }}
+          HEADSCALE_PREAUTHKEY: ${{ secrets.HEADSCALE_PREAUTHKEY }}
+          INSTALL_PROTO_DEPENDENCIES: true
+
+      - name: Build and deploy gRPC clients
+        run: bun run .github/scripts/src/build-clients --version=${{ github.ref_name }}

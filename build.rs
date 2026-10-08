@@ -8,5 +8,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .file_descriptor_set_path(out_dir.join("helloworld_descriptor.bin"))
         .compile_protos(&["proto/v1/helloworld.proto"], &["proto/"])?;
 
+    tonic_prost_build::configure()
+        .file_descriptor_set_path(out_dir.join("members_descriptor.bin"))
+        .compile_protos(
+            &["proto/v1/members.proto", "proto/v1/core_admin.proto"],
+            &["proto/"],
+        )?;
+
     Ok(())
 }

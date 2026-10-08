@@ -1,0 +1,54 @@
+syntax = "proto3";
+package members;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "patinanetwork.org/grpc/members-grpc-service;members";
+option java_package = "org.patinanetwork.grpc.members.v1";
+option java_multiple_files = true;
+
+service MembersService {
+  rpc getMember(GetMemberRequest) returns (GetMemberResponse);
+
+  rpc listMembers(ListMembersRequest) returns (ListMembersResponse);
+}
+
+message Member {
+  string member_id = 1;
+  string email = 2;
+  string first_name = 3;
+  string last_name = 4;
+  // YYYY-MM-DD
+  string join_date = 5;
+  optional string discord_id = 6;
+  optional string discord_username = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  optional google.protobuf.Timestamp archived_at = 9;
+}
+
+message GetMemberRequest {
+  oneof identifier {
+    string member_id = 1;
+    string email = 2;
+    string discord_id = 3;
+  }
+}
+
+message GetMemberResponse { Member member = 1; }
+
+message ListMembersRequest {
+  bool include_archived = 1;
+  int32 page_size = 2;
+  string page_token = 3;
+}
+
+message ListMembersResponse {
+  repeated Member members = 1;
+  string next_page_token = 2;
+}
+
+message MemberCreated { Member member = 1; }
+
+message MemberUpdated { Member member = 1; }
+
+message MemberArchived { Member member = 1; }

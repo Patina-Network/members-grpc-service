@@ -1,8 +1,4 @@
-import {
-  GitHubClient,
-  VersioningClient,
-  VersionUpdatingStrategy,
-} from "@tahminator/pipeline";
+import { GitHubClient, VersioningClient, VersionUpdatingStrategy } from "@tahminator/pipeline";
 
 import { requiredEnv } from "../consts";
 
@@ -13,10 +9,7 @@ async function main() {
     privateKey: requiredEnv("_GITHUB_APP_PEM_CONTENT"),
   });
 
-  const versioningClient = new VersioningClient(
-    ghClient,
-    VersionUpdatingStrategy.RUST_CARGO,
-  );
+  const versioningClient = new VersioningClient(ghClient, VersionUpdatingStrategy.RUST_CARGO);
 
   const cargoToml = Bun.TOML.parse(await Bun.file("./Cargo.toml").text()) as {
     package?: { version?: string };

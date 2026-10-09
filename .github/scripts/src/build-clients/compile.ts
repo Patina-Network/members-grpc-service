@@ -6,11 +6,7 @@ import {
 } from "@tahminator/pipeline";
 
 import { requiredEnv } from "../consts";
-import {
-  CLIENT_PACKAGE_NAME,
-  JAVA_GROUP_ID,
-  PACKAGE_REGISTRY_URL,
-} from "../consts";
+import { CLIENT_PACKAGE_NAME, JAVA_GROUP_ID, PACKAGE_REGISTRY_URL } from "../consts";
 
 /** Generates the Rust, Go and Java clients at `version` and publishes them. */
 export async function compileClients(version: string) {

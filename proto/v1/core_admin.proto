@@ -1,0 +1,65 @@
+syntax = "proto3";
+package members.admin;
+
+import "google/protobuf/timestamp.proto";
+import "v1/members.proto";
+
+option go_package = "patinanetwork.org/grpc/members-grpc-service/admin;admin";
+option java_package = "org.patinanetwork.grpc.members.admin.v1";
+option java_multiple_files = true;
+
+// core-admin only
+service MembersAdminService {
+  rpc createMember(CreateMemberRequest) returns (CreateMemberResponse);
+
+  rpc updateMember(UpdateMemberRequest) returns (UpdateMemberResponse);
+
+  rpc archiveMember(ArchiveMemberRequest) returns (ArchiveMemberResponse);
+
+  rpc importMembers(ImportMembersRequest) returns (ImportMembersResponse);
+}
+
+message CreateMemberRequest {
+  string email = 1;
+  string first_name = 2;
+  string last_name = 3;
+  optional google.protobuf.Timestamp joined_at = 4;
+  optional string discord_id = 5;
+  optional string discord_username = 6;
+}
+
+message CreateMemberResponse { members.Member member = 1; }
+
+message UpdateMemberRequest {
+  string member_id = 1;
+  optional string email = 2;
+  optional string first_name = 3;
+  optional string last_name = 4;
+  optional google.protobuf.Timestamp joined_at = 5;
+  optional string discord_id = 6;
+  optional string discord_username = 7;
+}
+
+message UpdateMemberResponse { members.Member member = 1; }
+
+message ArchiveMemberRequest { string member_id = 1; }
+
+message ArchiveMemberResponse { members.Member member = 1; }
+
+message ImportMembersRequest { repeated CreateMemberRequest members = 1; }
+
+enum ImportMemberStatus {
+  IMPORT_MEMBER_STATUS_UNSPECIFIED = 0;
+  IMPORT_MEMBER_STATUS_CREATED = 1;
+  IMPORT_MEMBER_STATUS_UPDATED = 2;
+  IMPORT_MEMBER_STATUS_FAILED = 3;
+}
+
+message ImportMemberResult {
+  string email = 1;
+  ImportMemberStatus status = 2;
+  optional members.Member member = 3;
+  optional string error = 4;
+}
+
+message ImportMembersResponse { repeated ImportMemberResult results = 1; }

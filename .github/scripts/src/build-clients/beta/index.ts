@@ -1,22 +1,9 @@
-import {
-  GitHubClient,
-  VersioningClient,
-  VersionUpdatingStrategy,
-} from "@tahminator/pipeline";
+import { GitHubClient, VersioningClient, VersionUpdatingStrategy } from "@tahminator/pipeline";
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
 
-import {
-  GITHUB_OWNER,
-  GITHUB_REPOSITORY,
-  requiredEnv,
-  shortSha,
-} from "../../consts";
-import {
-  CLIENT_PACKAGE_NAME,
-  JAVA_GROUP_ID,
-  PACKAGE_REGISTRY_URL,
-} from "../../consts";
+import { GITHUB_OWNER, GITHUB_REPOSITORY, requiredEnv, shortSha } from "../../consts";
+import { CLIENT_PACKAGE_NAME, JAVA_GROUP_ID, PACKAGE_REGISTRY_URL } from "../../consts";
 import { compileClients } from "../compile";
 
 const { sha, prId } = await yargs(hideBin(process.argv))

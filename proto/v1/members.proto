@@ -18,8 +18,7 @@ message Member {
   string email = 2;
   string first_name = 3;
   string last_name = 4;
-  // YYYY-MM-DD
-  string join_date = 5;
+  google.protobuf.Timestamp joined_at = 5;
   optional string discord_id = 6;
   optional string discord_username = 7;
   google.protobuf.Timestamp updated_at = 8;

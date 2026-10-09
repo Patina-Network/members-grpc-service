@@ -3,7 +3,7 @@ use std::{sync::Arc, time::SystemTime};
 use tonic::{Code, Request, Response, Result, Status};
 
 tonic::include_proto!("helloworld");
-pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("helloworld_descriptor");
+pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("descriptor");
 
 // main will need this
 pub use greeter_service_server::GreeterServiceServer;

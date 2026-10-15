@@ -35,17 +35,17 @@ impl MemberRepo for MemberSqlRepo {
             MemberRow,
             r#"
             SELECT
-                member_id,
+                id AS member_id,
                 email,
-                first_name,
-                last_name,
-                joined_at,
-                discord_id,
-                discord_username,
-                updated_at,
-                archived_at
-            FROM members
-            WHERE member_id = $1
+                "firstName" AS first_name,
+                "lastName" AS last_name,
+                "joinedAt" AS joined_at,
+                "discordId" AS discord_id,
+                "discordUsername" AS discord_username,
+                "updatedAt" AS updated_at,
+                "archivedAt" AS archived_at
+            FROM "Member"
+            WHERE id = $1
             "#,
             member_id,
         )
@@ -61,16 +61,16 @@ impl MemberRepo for MemberSqlRepo {
             MemberRow,
             r#"
             SELECT
-                member_id,
+                id AS member_id,
                 email,
-                first_name,
-                last_name,
-                joined_at,
-                discord_id,
-                discord_username,
-                updated_at,
-                archived_at
-            FROM members
+                "firstName" AS first_name,
+                "lastName" AS last_name,
+                "joinedAt" AS joined_at,
+                "discordId" AS discord_id,
+                "discordUsername" AS discord_username,
+                "updatedAt" AS updated_at,
+                "archivedAt" AS archived_at
+            FROM "Member"
             WHERE email = $1
             "#,
             email,
@@ -87,17 +87,17 @@ impl MemberRepo for MemberSqlRepo {
             MemberRow,
             r#"
             SELECT
-                member_id,
+                id AS member_id,
                 email,
-                first_name,
-                last_name,
-                joined_at,
-                discord_id,
-                discord_username,
-                updated_at,
-                archived_at
-            FROM members
-            WHERE discord_id = $1
+                "firstName" AS first_name,
+                "lastName" AS last_name,
+                "joinedAt" AS joined_at,
+                "discordId" AS discord_id,
+                "discordUsername" AS discord_username,
+                "updatedAt" AS updated_at,
+                "archivedAt" AS archived_at
+            FROM "Member"
+            WHERE "discordId" = $1
             "#,
             discord_id,
         )
@@ -114,19 +114,19 @@ impl MemberRepo for MemberSqlRepo {
             MemberRow,
             r#"
             SELECT
-                member_id,
+                id AS member_id,
                 email,
-                first_name,
-                last_name,
-                joined_at,
-                discord_id,
-                discord_username,
-                updated_at,
-                archived_at
-            FROM members
-            WHERE ($1::bool OR archived_at IS NULL)
-              AND member_id > $2
-            ORDER BY member_id
+                "firstName" AS first_name,
+                "lastName" AS last_name,
+                "joinedAt" AS joined_at,
+                "discordId" AS discord_id,
+                "discordUsername" AS discord_username,
+                "updatedAt" AS updated_at,
+                "archivedAt" AS archived_at
+            FROM "Member"
+            WHERE ($1::bool OR "archivedAt" IS NULL)
+              AND id > $2
+            ORDER BY id
             LIMIT $3
             "#,
             query.include_archived,
@@ -144,27 +144,27 @@ impl MemberRepo for MemberSqlRepo {
         let row = sqlx::query_as!(
             MemberRow,
             r#"
-            INSERT INTO members (
-                member_id,
+            INSERT INTO "Member" (
+                id,
                 email,
-                first_name,
-                last_name,
-                joined_at,
-                discord_id,
-                discord_username,
-                updated_at
+                "firstName",
+                "lastName",
+                "joinedAt",
+                "discordId",
+                "discordUsername",
+                "updatedAt"
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING
-                member_id,
+                id AS member_id,
                 email,
-                first_name,
-                last_name,
-                joined_at,
-                discord_id,
-                discord_username,
-                updated_at,
-                archived_at
+                "firstName" AS first_name,
+                "lastName" AS last_name,
+                "joinedAt" AS joined_at,
+                "discordId" AS discord_id,
+                "discordUsername" AS discord_username,
+                "updatedAt" AS updated_at,
+                "archivedAt" AS archived_at
             "#,
             member.member_id,
             member.email,
@@ -186,27 +186,27 @@ impl MemberRepo for MemberSqlRepo {
         let row = sqlx::query_as!(
             MemberRow,
             r#"
-            UPDATE members
+            UPDATE "Member"
             SET
                 email = $2,
-                first_name = $3,
-                last_name = $4,
-                joined_at = $5,
-                discord_id = $6,
-                discord_username = $7,
-                updated_at = $8,
-                archived_at = $9
-            WHERE member_id = $1
+                "firstName" = $3,
+                "lastName" = $4,
+                "joinedAt" = $5,
+                "discordId" = $6,
+                "discordUsername" = $7,
+                "updatedAt" = $8,
+                "archivedAt" = $9
+            WHERE id = $1
             RETURNING
-                member_id,
+                id AS member_id,
                 email,
-                first_name,
-                last_name,
-                joined_at,
-                discord_id,
-                discord_username,
-                updated_at,
-                archived_at
+                "firstName" AS first_name,
+                "lastName" AS last_name,
+                "joinedAt" AS joined_at,
+                "discordId" AS discord_id,
+                "discordUsername" AS discord_username,
+                "updatedAt" AS updated_at,
+                "archivedAt" AS archived_at
             "#,
             member.member_id,
             member.email,
@@ -251,8 +251,8 @@ fn map_db(err: sqlx::Error) -> RepoError {
     }
 
     match db_err.constraint() {
-        Some("members_email_key") => RepoError::DuplicateEmail,
-        Some("members_discord_id_key") => RepoError::DuplicateDiscordId,
+        Some("Member_email_key") => RepoError::DuplicateEmail,
+        Some("Member_discordId_key") => RepoError::DuplicateDiscordId,
         _ => RepoError::Database(err.to_string()),
     }
 }

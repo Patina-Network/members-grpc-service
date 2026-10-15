@@ -1,6 +1,8 @@
+use std::borrow::Cow;
 use std::time::Duration;
 
 use anyhow::Context;
+use sqlx::migrate::{Migration, MigrationType, Migrator};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 
 use crate::config::Config;
@@ -24,10 +26,30 @@ pub async fn connect(config: &Config) -> anyhow::Result<sqlx::PgPool> {
         .await
         .context("failed to connect to postgres")?;
 
-    sqlx::migrate!()
-        .run(&pool)
-        .await
-        .context("failed to run database migrations")?;
+    migrate(&pool).await?;
 
     Ok(pool)
+}
+
+pub async fn migrate(pool: &sqlx::PgPool) -> anyhow::Result<()> {
+    migrator()
+        .run(pool)
+        .await
+        .context("failed to run database migrations")
+}
+
+fn migrator() -> Migrator {
+    let sql = include_str!("../../db/migration/V0001__Create_members_table.SQL");
+    Migrator {
+        migrations: Cow::Owned(vec![Migration::new(
+            1,
+            Cow::Borrowed("create members table"),
+            MigrationType::Simple,
+            Cow::Borrowed(sql),
+            false,
+        )]),
+        ignore_missing: false,
+        locking: true,
+        no_tx: false,
+    }
 }

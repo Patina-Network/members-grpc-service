@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT\n                member_id,\n                email,\n                first_name,\n                last_name,\n                joined_at,\n                discord_id,\n                discord_username,\n                updated_at,\n                archived_at\n            FROM members\n            WHERE discord_id = $1\n            ",
+  "query": "\n            SELECT\n                id AS member_id,\n                email,\n                \"firstName\" AS first_name,\n                \"lastName\" AS last_name,\n                \"joinedAt\" AS joined_at,\n                \"discordId\" AS discord_id,\n                \"discordUsername\" AS discord_username,\n                \"updatedAt\" AS updated_at,\n                \"archivedAt\" AS archived_at\n            FROM \"Member\"\n            WHERE ($1::bool OR \"archivedAt\" IS NULL)\n              AND id > $2\n            ORDER BY id\n            LIMIT $3\n            ",
   "describe": {
     "columns": [
       {
@@ -51,7 +51,9 @@
     ],
     "parameters": {
       "Left": [
-        "Text"
+        "Bool",
+        "Uuid",
+        "Int8"
       ]
     },
     "nullable": [
@@ -66,5 +68,5 @@
       true
     ]
   },
-  "hash": "b55943b9f135f660f0afc91e6ee12a919e7087206962d038424900bffcb9a24a"
+  "hash": "3737ba2ba19a33f8dc6fa23b7fb787ab49de9f6dcb183e38863ee674e8484c3c"
 }

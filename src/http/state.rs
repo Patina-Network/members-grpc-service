@@ -18,8 +18,6 @@ pub struct AppState {
     pub sys_collector: Collector,
     pub greetings_repo: Arc<GreetingsRepository>,
     pub db: PgPool,
-    // Member RPCs are a later change. The service stays on the running process until then.
-    #[allow(dead_code)]
     pub members: MemberService<MemberSqlRepo>,
 }
 

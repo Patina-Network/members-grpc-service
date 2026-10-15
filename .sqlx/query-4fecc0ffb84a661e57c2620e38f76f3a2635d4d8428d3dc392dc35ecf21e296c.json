@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT\n                member_id,\n                email,\n                first_name,\n                last_name,\n                joined_at,\n                discord_id,\n                discord_username,\n                updated_at,\n                archived_at\n            FROM members\n            WHERE ($1::bool OR archived_at IS NULL)\n              AND member_id > $2\n            ORDER BY member_id\n            LIMIT $3\n            ",
+  "query": "\n            UPDATE \"Member\"\n            SET\n                email = $2,\n                \"firstName\" = $3,\n                \"lastName\" = $4,\n                \"joinedAt\" = $5,\n                \"discordId\" = $6,\n                \"discordUsername\" = $7,\n                \"updatedAt\" = $8,\n                \"archivedAt\" = $9\n            WHERE id = $1\n            RETURNING\n                id AS member_id,\n                email,\n                \"firstName\" AS first_name,\n                \"lastName\" AS last_name,\n                \"joinedAt\" AS joined_at,\n                \"discordId\" AS discord_id,\n                \"discordUsername\" AS discord_username,\n                \"updatedAt\" AS updated_at,\n                \"archivedAt\" AS archived_at\n            ",
   "describe": {
     "columns": [
       {
@@ -51,9 +51,15 @@
     ],
     "parameters": {
       "Left": [
-        "Bool",
         "Uuid",
-        "Int8"
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Timestamptz"
       ]
     },
     "nullable": [
@@ -68,5 +74,5 @@
       true
     ]
   },
-  "hash": "2b44fafcaffe7de076f4b137d6d451958afd6dc5b89c8350a5015ed23a84dbf0"
+  "hash": "4fecc0ffb84a661e57c2620e38f76f3a2635d4d8428d3dc392dc35ecf21e296c"
 }

@@ -19,6 +19,7 @@ pub enum RepoError {
     Database(String),
 }
 
+#[allow(async_fn_in_trait)]
 pub trait MemberRepo: Send + Sync {
     async fn find_by_id(&self, member_id: Uuid) -> Result<Option<Member>, RepoError>;
 

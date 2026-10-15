@@ -473,7 +473,7 @@ mod tests {
     async fn sql_repo_create_and_get() {
         let url = std::env::var("DATABASE_URL").unwrap();
         let pool = sqlx::PgPool::connect(&url).await.unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
+        crate::db::client::migrate(&pool).await.unwrap();
 
         let service = MemberService::new(crate::db::members::MemberSqlRepo::new(pool.clone()));
         let email = format!("sql-test-{}@example.com", Uuid::new_v4());
@@ -492,7 +492,7 @@ mod tests {
         let found = service.get(MemberLookup::Email(email)).await.unwrap();
         assert_eq!(found, created);
 
-        sqlx::query("DELETE FROM members WHERE member_id = $1")
+        sqlx::query(r#"DELETE FROM "Member" WHERE id = $1"#)
             .bind(created.member_id)
             .execute(&pool)
             .await

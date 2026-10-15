@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            INSERT INTO members (\n                member_id,\n                email,\n                first_name,\n                last_name,\n                joined_at,\n                discord_id,\n                discord_username,\n                updated_at\n            )\n            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)\n            RETURNING\n                member_id,\n                email,\n                first_name,\n                last_name,\n                joined_at,\n                discord_id,\n                discord_username,\n                updated_at,\n                archived_at\n            ",
+  "query": "\n            SELECT\n                id AS member_id,\n                email,\n                \"firstName\" AS first_name,\n                \"lastName\" AS last_name,\n                \"joinedAt\" AS joined_at,\n                \"discordId\" AS discord_id,\n                \"discordUsername\" AS discord_username,\n                \"updatedAt\" AS updated_at,\n                \"archivedAt\" AS archived_at\n            FROM \"Member\"\n            WHERE id = $1\n            ",
   "describe": {
     "columns": [
       {
@@ -51,14 +51,7 @@
     ],
     "parameters": {
       "Left": [
-        "Uuid",
-        "Text",
-        "Text",
-        "Text",
-        "Timestamptz",
-        "Text",
-        "Text",
-        "Timestamptz"
+        "Uuid"
       ]
     },
     "nullable": [
@@ -73,5 +66,5 @@
       true
     ]
   },
-  "hash": "f7f8a2a33ece582a1bfd1f0072af432d6d724ba244469f8b010ccc5ab03e3b7b"
+  "hash": "4ba07a0c3a13bdb52a5a555936c4f4a858e977d1aab5d8f8fc60a6d90479eb67"
 }

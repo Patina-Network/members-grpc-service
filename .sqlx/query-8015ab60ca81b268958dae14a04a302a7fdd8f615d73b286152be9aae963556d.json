@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            UPDATE members\n            SET\n                email = $2,\n                first_name = $3,\n                last_name = $4,\n                joined_at = $5,\n                discord_id = $6,\n                discord_username = $7,\n                updated_at = $8,\n                archived_at = $9\n            WHERE member_id = $1\n            RETURNING\n                member_id,\n                email,\n                first_name,\n                last_name,\n                joined_at,\n                discord_id,\n                discord_username,\n                updated_at,\n                archived_at\n            ",
+  "query": "\n            INSERT INTO \"Member\" (\n                id,\n                email,\n                \"firstName\",\n                \"lastName\",\n                \"joinedAt\",\n                \"discordId\",\n                \"discordUsername\",\n                \"updatedAt\"\n            )\n            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)\n            RETURNING\n                id AS member_id,\n                email,\n                \"firstName\" AS first_name,\n                \"lastName\" AS last_name,\n                \"joinedAt\" AS joined_at,\n                \"discordId\" AS discord_id,\n                \"discordUsername\" AS discord_username,\n                \"updatedAt\" AS updated_at,\n                \"archivedAt\" AS archived_at\n            ",
   "describe": {
     "columns": [
       {
@@ -58,7 +58,6 @@
         "Timestamptz",
         "Text",
         "Text",
-        "Timestamptz",
         "Timestamptz"
       ]
     },
@@ -74,5 +73,5 @@
       true
     ]
   },
-  "hash": "73a91ce534f074b75b4160dc0ab24a8a3d71c2379e5225fac5e0b6cf4e90a0cd"
+  "hash": "8015ab60ca81b268958dae14a04a302a7fdd8f615d73b286152be9aae963556d"
 }

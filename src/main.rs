@@ -8,22 +8,17 @@ use tonic_middleware::MiddlewareLayer;
 use tower_http::catch_panic;
 use tracing::info;
 
-use crate::{
+use hello_world_grpc_service::{
     config::Config,
     db::{GreetingsRepository, client::connect, members::MemberSqlRepo},
-    grpc::greeter::{GreeterService, GreeterServiceServer},
-    grpc::metrics::GrpcRequestMetricsMiddleware,
+    grpc::{
+        self,
+        greeter::{GreeterService, GreeterServiceServer},
+        metrics::GrpcRequestMetricsMiddleware,
+    },
     http::{router, state::AppState},
     members::MemberService,
 };
-
-mod config;
-mod db;
-mod grpc;
-mod http;
-#[cfg_attr(not(test), allow(dead_code))]
-mod members;
-mod metrics;
 
 fn init_tracing() {
     let use_json = std::env::var("ENVIRONMENT")

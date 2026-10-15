@@ -17,7 +17,7 @@ RUN addgroup -g 10001 -S grpc-server \
 
 WORKDIR /app
 
-COPY --from=build /app/target/release/hello-world-grpc-service ./
+COPY --from=build /app/target/release/members-grpc-service ./
 
 ENV ENVIRONMENT=production
 
@@ -25,4 +25,4 @@ USER 10001:10001
 
 EXPOSE 3000 50051
 
-ENTRYPOINT ["./hello-world-grpc-service"]
+ENTRYPOINT ["./members-grpc-service"]

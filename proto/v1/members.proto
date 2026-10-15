@@ -45,9 +45,3 @@ message ListMembersResponse {
   repeated Member members = 1;
   string next_page_token = 2;
 }
-
-message MemberCreated { Member member = 1; }
-
-message MemberUpdated { Member member = 1; }
-
-message MemberArchived { Member member = 1; }

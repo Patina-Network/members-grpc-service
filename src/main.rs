@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use anyhow::Context;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use tokio::net::TcpListener;
@@ -10,17 +8,16 @@ use tracing::info;
 
 use crate::{
     config::Config,
-    db::GreetingsRepository,
-    grpc::greeter::{GreeterService, GreeterServiceServer},
+    grpc::members::{MembersService, MembersServiceServer},
+    grpc::members_admin::{MembersAdminService, MembersAdminServiceServer},
     grpc::metrics::GrpcRequestMetricsMiddleware,
     http::{router, state::AppState},
 };
 
 mod config;
-mod db;
 mod grpc;
 mod http;
-mod metrics;
+mod proto;
 
 fn init_tracing() {
     let use_json = std::env::var("ENVIRONMENT")
@@ -59,14 +56,12 @@ async fn main() -> anyhow::Result<()> {
     let grpc_addr = format!("0.0.0.0:{}", config.grpc_port).parse()?;
     let http_addr = format!("0.0.0.0:{}", config.http_port);
 
-    // repos and internal svcs should be wrapped in Arc so that we can pass them into multiple grpc
-    // svc impls without expensive cloning (especially when we have an actual database connection)
-    let greeter_repo = Arc::new(GreetingsRepository::new());
-
-    let grpc_greeter_svc = GreeterService::new(greeter_repo.clone());
     let (grpc_health_reporter, grpc_health_svc) = tonic_health::server::health_reporter();
     grpc_health_reporter
-        .set_serving::<GreeterServiceServer<GreeterService>>()
+        .set_serving::<MembersServiceServer<MembersService>>()
+        .await;
+    grpc_health_reporter
+        .set_serving::<MembersAdminServiceServer<MembersAdminService>>()
         .await;
     grpc_health_reporter
         .set_service_status("", tonic_health::ServingStatus::Serving)
@@ -75,13 +70,13 @@ async fn main() -> anyhow::Result<()> {
         (
             Some(
                 tonic_reflection::server::Builder::configure()
-                    .register_encoded_file_descriptor_set(grpc::greeter::FILE_DESCRIPTOR_SET)
+                    .register_encoded_file_descriptor_set(proto::FILE_DESCRIPTOR_SET)
                     .build_v1()
                     .context("failed to build v1 gRPC reflection service")?,
             ),
             Some(
                 tonic_reflection::server::Builder::configure()
-                    .register_encoded_file_descriptor_set(grpc::greeter::FILE_DESCRIPTOR_SET)
+                    .register_encoded_file_descriptor_set(proto::FILE_DESCRIPTOR_SET)
                     .build_v1alpha()
                     .context("failed to build v1alpha gRPC reflection service")?,
             ),
@@ -101,14 +96,15 @@ async fn main() -> anyhow::Result<()> {
             .layer(grpc_panic_layer)
             .layer(MiddlewareLayer::new(GrpcRequestMetricsMiddleware))
             .add_service(grpc_health_svc)
-            .add_service(GreeterServiceServer::new(grpc_greeter_svc))
+            .add_service(MembersServiceServer::new(MembersService))
+            .add_service(MembersAdminServiceServer::new(MembersAdminService))
             .add_optional_service(grpc_reflection_svc)
             .add_optional_service(grpc_reflection_svc2)
             .serve(grpc_addr)
             .await
     });
 
-    let http_app_state = AppState::new(&config, prom_handle, sys_collector, greeter_repo);
+    let http_app_state = AppState::new(&config, prom_handle, sys_collector);
 
     let http_listener = TcpListener::bind(&http_addr)
         .await

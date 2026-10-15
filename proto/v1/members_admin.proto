@@ -1,0 +1,98 @@
+syntax = "proto3";
+package members.admin;
+
+import "google/protobuf/field_mask.proto";
+import "google/protobuf/timestamp.proto";
+import "v1/members.proto";
+
+option go_package = "patinanetwork.org/grpc/members-grpc-service/admin;membersadmin";
+option java_package = "org.patinanetwork.grpc.members.admin.v1";
+option java_multiple_files = true;
+
+service MembersAdminService {
+  rpc createMember(CreateMemberRequest) returns (CreateMemberResponse);
+
+  rpc updateMember(UpdateMemberRequest) returns (UpdateMemberResponse);
+
+  rpc archiveMember(ArchiveMemberRequest) returns (ArchiveMemberResponse);
+
+  // Applies a batch of member operations in one call and reports the outcome
+  // of every operation. Operations are applied independently in request
+  // order; a failed operation does not roll back the others.
+  rpc bulkMemberOperations(BulkMemberOperationsRequest)
+      returns (BulkMemberOperationsResponse);
+}
+
+message CreateMemberRequest {
+  string email = 1;
+  string first_name = 2;
+  string last_name = 3;
+  optional google.protobuf.Timestamp joined_at = 4;
+  optional string discord_id = 5;
+  optional string discord_username = 6;
+}
+
+message CreateMemberResponse { members.Member member = 1; }
+
+message UpdateMemberRequest {
+  string member_id = 1;
+  optional string email = 2;
+  optional string first_name = 3;
+  optional string last_name = 4;
+  optional google.protobuf.Timestamp joined_at = 5;
+  optional string discord_id = 6;
+  optional string discord_username = 7;
+}
+
+message UpdateMemberResponse { members.Member member = 1; }
+
+message ArchiveMemberRequest { string member_id = 1; }
+
+message ArchiveMemberResponse { members.Member member = 1; }
+
+// Create a member, or update the existing member with the same email.
+message UpsertMemberRequest { CreateMemberRequest member = 1; }
+
+message MemberOperation {
+  oneof operation {
+    CreateMemberRequest create = 1;
+    UpdateMemberRequest update = 2;
+    ArchiveMemberRequest archive = 3;
+    UpsertMemberRequest upsert = 4;
+  }
+}
+
+message BulkMemberOperationsRequest { repeated MemberOperation operations = 1; }
+
+message MemberCreated { members.Member member = 1; }
+
+message MemberUpdated {
+  members.Member before = 1;
+  members.Member after = 2;
+  // Member field paths that differ between `before` and `after`.
+  google.protobuf.FieldMask changed_fields = 3;
+}
+
+message MemberArchived { members.Member member = 1; }
+
+// The operation matched an existing member but changed nothing.
+message MemberUnchanged { members.Member member = 1; }
+
+message MemberOperationFailed { string error = 1; }
+
+message MemberOperationResult {
+  // Position of the operation in BulkMemberOperationsRequest.operations.
+  uint32 index = 1;
+  oneof outcome {
+    MemberCreated created = 2;
+    MemberUpdated updated = 3;
+    MemberArchived archived = 4;
+    MemberUnchanged unchanged = 5;
+    MemberOperationFailed failed = 6;
+  }
+}
+
+// One result per requested operation, in request order.
+message BulkMemberOperationsResponse {
+  repeated MemberOperationResult results = 1;
+}

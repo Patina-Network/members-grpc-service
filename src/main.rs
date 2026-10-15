@@ -10,16 +10,19 @@ use tracing::info;
 
 use crate::{
     config::Config,
-    db::GreetingsRepository,
+    db::{GreetingsRepository, client::connect, members::MemberSqlRepo},
     grpc::greeter::{GreeterService, GreeterServiceServer},
     grpc::metrics::GrpcRequestMetricsMiddleware,
     http::{router, state::AppState},
+    members::MemberService,
 };
 
 mod config;
 mod db;
 mod grpc;
 mod http;
+#[cfg_attr(not(test), allow(dead_code))]
+mod members;
 mod metrics;
 
 fn init_tracing() {
@@ -61,6 +64,9 @@ async fn main() -> anyhow::Result<()> {
 
     // repos and internal svcs should be wrapped in Arc so that we can pass them into multiple grpc
     // svc impls without expensive cloning (especially when we have an actual database connection)
+    let db = connect(&config).await?;
+    let members = MemberService::new(MemberSqlRepo::new(db.clone()));
+
     let greeter_repo = Arc::new(GreetingsRepository::new());
 
     let grpc_greeter_svc = GreeterService::new(greeter_repo.clone());
@@ -108,7 +114,14 @@ async fn main() -> anyhow::Result<()> {
             .await
     });
 
-    let http_app_state = AppState::new(&config, prom_handle, sys_collector, greeter_repo);
+    let http_app_state = AppState::new(
+        &config,
+        prom_handle,
+        sys_collector,
+        greeter_repo,
+        db,
+        members,
+    );
 
     let http_listener = TcpListener::bind(&http_addr)
         .await

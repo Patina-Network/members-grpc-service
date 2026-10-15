@@ -1,4 +1,7 @@
+pub mod client;
 pub mod id;
+#[cfg_attr(not(test), allow(dead_code))]
+pub mod members;
 
 use crate::{db::id::IdGenerator, metrics::MetricsCollector};
 

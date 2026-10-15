@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "name": "Patina-Network/hello-world-grpc-service/bruno",
+  "name": "Patina-Network/members-grpc-service/bruno",
   "type": "collection",
   "ignore": [
     "node_modules",

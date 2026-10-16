@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS "Member" (
+CREATE TABLE "Member" (
     id UUID PRIMARY KEY,
     email TEXT NOT NULL UNIQUE,
     "firstName" TEXT NOT NULL,

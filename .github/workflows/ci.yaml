@@ -20,27 +20,6 @@ jobs:
     name: Test database migrations
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: members
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    env:
-      DATABASE_HOST: localhost
-      DATABASE_PORT: "5432"
-      DATABASE_NAME: members
-      DATABASE_USER: postgres
-      DATABASE_PASSWORD: postgres
-      DATABASE_SSLMODE: disable
     steps:
       - name: Checkout Repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -51,14 +30,8 @@ jobs:
           INSTALL_JUST: true
           INSTALL_MIGRATE: "true"
 
-      - name: Apply migrations to an empty database
-        uses: ./.github/composite/migrate
-
-      - name: Verify repeat runs and rollback
-        run: |
-          just migrate up
-          just migrate down -all
-          just migrate up
+      - name: Test database migrations
+        run: bun run .github/scripts/src/test/run-migration-tests.ts
 
   test:
     name: Run Tests

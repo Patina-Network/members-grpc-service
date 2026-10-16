@@ -4,18 +4,6 @@ description: Apply pending migrations using DATABASE_* environment variables
 runs:
   using: composite
   steps:
-    - name: Install golang-migrate
-      shell: bash
-      run: |
-        set -euo pipefail
-        install_dir="$(mktemp -d "${RUNNER_TEMP}/migrate.XXXXXX")"
-        curl --fail --silent --show-error --location --retry 3 \
-          https://github.com/golang-migrate/migrate/releases/download/v4.19.0/migrate.linux-amd64.tar.gz \
-          --output "$install_dir/migrate.tar.gz"
-        echo "2dc421d7c24c1ca47799cd7cc0e137ff92d24adc76fda475acf19d1bd9685524  $install_dir/migrate.tar.gz" | sha256sum --check
-        tar -xzf "$install_dir/migrate.tar.gz" -C "$install_dir" migrate
-        echo "$install_dir" >> "$GITHUB_PATH"
-
     - name: Apply migrations
       shell: bash
       run: just migrate up

@@ -1,0 +1,9 @@
+name: Migrate database
+description: Apply pending migrations using DATABASE_* environment variables
+
+runs:
+  using: composite
+  steps:
+    - name: Apply migrations
+      shell: bash
+      run: just migrate up

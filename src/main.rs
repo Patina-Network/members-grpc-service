@@ -6,15 +6,18 @@ use tonic_middleware::MiddlewareLayer;
 use tower_http::catch_panic;
 use tracing::info;
 
-use crate::{
+use members_grpc_service::{
     config::Config,
+    db::{client::connect, health_check::HealthCheckRepository},
+};
+
+use crate::{
     grpc::members::{MembersService, MembersServiceServer},
     grpc::members_admin::{MembersAdminService, MembersAdminServiceServer},
     grpc::metrics::GrpcRequestMetricsMiddleware,
     http::{router, state::AppState},
 };
 
-mod config;
 mod grpc;
 mod http;
 mod proto;
@@ -52,6 +55,7 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Config::from_env()?;
     config.log();
+    let db = connect(&config).await?;
 
     let grpc_addr = format!("0.0.0.0:{}", config.grpc_port).parse()?;
     let http_addr = format!("0.0.0.0:{}", config.http_port);
@@ -104,7 +108,12 @@ async fn main() -> anyhow::Result<()> {
             .await
     });
 
-    let http_app_state = AppState::new(&config, prom_handle, sys_collector);
+    let http_app_state = AppState::new(
+        &config,
+        prom_handle,
+        sys_collector,
+        HealthCheckRepository::new(db),
+    );
 
     let http_listener = TcpListener::bind(&http_addr)
         .await

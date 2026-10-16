@@ -42,7 +42,7 @@ jobs:
 
       - name: Get Parent SHA
         id: prev
-        run: echo "sha=$(git rev-parse --short=8 ${{ github.sha }}^1)" >> $GITHUB_OUTPUT
+        run: echo "sha=$(git rev-parse --short=8 ${{ github.sha }}^1)" >> "$GITHUB_OUTPUT"
 
       - name: Promote image
         uses: ./.github/composite/promote-server
@@ -55,16 +55,32 @@ jobs:
     name: Deploy to Production
     runs-on: ubuntu-latest
     needs: [promoteImage]
+    timeout-minutes: 20
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Pipeline
-        uses: tahminator/pipeline/actions/setup@52eb2a0451daba94989db6a6fa232e689144aa50 # 1.0.96
+        uses: tahminator/pipeline/actions/setup@0d54deb9e9abab9530e4aa889a6c79c88a0ff5c7 # 1.0.99
         with:
           LINT_CI: true
+          INSTALL_JUST: true
+          INSTALL_MIGRATE: "true"
           SECRETS: ${{ toJSON(secrets) }}
+          HEADSCALE_ADDRESS: ${{ secrets.HEADSCALE_ADDRESS }}
+          HEADSCALE_USER: ${{ secrets.HEADSCALE_USER }}
+          HEADSCALE_PREAUTHKEY: ${{ secrets.HEADSCALE_PREAUTHKEY }}
+
+      - name: Migrate production database
+        uses: ./.github/composite/migrate
+        env:
+          DATABASE_HOST: ${{ secrets.PRODUCTION_MIGRATION_DATABASE_HOST }}
+          DATABASE_PORT: ${{ secrets.PRODUCTION_MIGRATION_DATABASE_PORT }}
+          DATABASE_NAME: ${{ secrets.PRODUCTION_MIGRATION_DATABASE_NAME }}
+          DATABASE_USER: ${{ secrets.PRODUCTION_MIGRATION_DATABASE_USER }}
+          DATABASE_PASSWORD: ${{ secrets.PRODUCTION_MIGRATION_DATABASE_PASSWORD }}
+          DATABASE_SSLMODE: require
 
       - name: Deploy Server
         uses: ./.github/composite/deploy-server

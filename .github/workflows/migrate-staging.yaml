@@ -1,0 +1,40 @@
+name: Migrate staging database
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-db-migrations
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    name: Apply staging migrations from the selected ref
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Pipeline
+        uses: tahminator/pipeline/actions/setup@0d54deb9e9abab9530e4aa889a6c79c88a0ff5c7 # 1.0.99
+        with:
+          LINT_CI: true
+          INSTALL_JUST: true
+          INSTALL_MIGRATE: "true"
+          HEADSCALE_ADDRESS: ${{ secrets.HEADSCALE_ADDRESS }}
+          HEADSCALE_USER: ${{ secrets.HEADSCALE_USER }}
+          HEADSCALE_PREAUTHKEY: ${{ secrets.HEADSCALE_PREAUTHKEY }}
+
+      - name: Migrate staging database
+        uses: ./.github/composite/migrate
+        env:
+          DATABASE_HOST: ${{ secrets.STAGING_MIGRATION_DATABASE_HOST }}
+          DATABASE_PORT: ${{ secrets.STAGING_MIGRATION_DATABASE_PORT }}
+          DATABASE_NAME: ${{ secrets.STAGING_MIGRATION_DATABASE_NAME }}
+          DATABASE_USER: ${{ secrets.STAGING_MIGRATION_DATABASE_USER }}
+          DATABASE_PASSWORD: ${{ secrets.STAGING_MIGRATION_DATABASE_PASSWORD }}
+          DATABASE_SSLMODE: require

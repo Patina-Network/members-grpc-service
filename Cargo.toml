@@ -13,7 +13,6 @@ prost-types = "0.14.4"
 tonic-prost = "0.14.6"
 tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread"] }
 anyhow = "1.0.104"
-thiserror = "2.0.20"
 tower-http = { version = "0.7.1", features = ["catch-panic"] }
 axum = { version = "0.8.9" }
 metrics = "0.24.6"
@@ -24,6 +23,7 @@ http-body = "1.1.0"
 pin-project-lite = "0.2.17"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["json", "env-filter"] }
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-native-roots", "postgres", "migrate"] }
 
 [build-dependencies]
 tonic-prost-build = "0.14"

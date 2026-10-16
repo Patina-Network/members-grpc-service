@@ -14,7 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // pub enum Outcome {
         // }
         // ^ the entire enum is at least 456 bytes
-         .boxed(".members.admin.MemberOperationResult.outcome.updated")
+        .boxed(".members.admin.MemberOperationResult.outcome.updated")
         .compile_protos(
             &["proto/v1/members.proto", "proto/v1/members_admin.proto"],
             &["proto/"],

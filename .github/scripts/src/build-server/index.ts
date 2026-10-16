@@ -3,20 +3,12 @@ import { $ } from "bun";
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
 
-import {
-  ARCHITECTURES,
-  dockerRepository,
-  requiredEnv,
-  shortSha,
-} from "../consts";
+import { ARCHITECTURES, dockerRepository, requiredEnv, shortSha } from "../consts";
 
-const { getGhaOutput, githubOutputFile, arch } = await yargs(
-  hideBin(process.argv),
-)
+const { getGhaOutput, githubOutputFile, arch } = await yargs(hideBin(process.argv))
   .option("getGhaOutput", {
     type: "boolean",
-    describe:
-      "Enable GitHub Actions output to receive latest built tag version",
+    describe: "Enable GitHub Actions output to receive latest built tag version",
     default: false,
   })
   .option("githubOutputFile", {

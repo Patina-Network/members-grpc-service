@@ -25,8 +25,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup pipeline
-        uses: tahminator/pipeline/actions/setup@8601c1c7d28289879772574a60fe817fb953eeee # 1.0.93
+        uses: tahminator/pipeline/actions/setup@52eb2a0451daba94989db6a6fa232e689144aa50 # 1.0.96
         with:
+          LINT_CI: true
           SECRETS: ${{ toJSON(secrets) }}
           INSTALL_JUST: true
           INSTALL_PROTOC: true
@@ -50,8 +51,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Pipeline
-        uses: tahminator/pipeline/actions/setup@8601c1c7d28289879772574a60fe817fb953eeee # 1.0.93
+        uses: tahminator/pipeline/actions/setup@52eb2a0451daba94989db6a6fa232e689144aa50 # 1.0.96
         with:
+          LINT_CI: true
           SECRETS: ${{ toJSON(secrets) }}
           HEADSCALE_ADDRESS: ${{ secrets.HEADSCALE_ADDRESS }}
           HEADSCALE_USER: ${{ secrets.HEADSCALE_USER }}
@@ -84,8 +86,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Pipeline
-        uses: tahminator/pipeline/actions/setup@8601c1c7d28289879772574a60fe817fb953eeee # 1.0.93
+        uses: tahminator/pipeline/actions/setup@52eb2a0451daba94989db6a6fa232e689144aa50 # 1.0.96
         with:
+          LINT_CI: true
           SECRETS: ${{ toJSON(secrets) }}
           HEADSCALE_ADDRESS: ${{ secrets.HEADSCALE_ADDRESS }}
           HEADSCALE_USER: ${{ secrets.HEADSCALE_USER }}
@@ -120,8 +123,9 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Setup pipeline
-        uses: tahminator/pipeline/actions/setup@8601c1c7d28289879772574a60fe817fb953eeee # 1.0.93
+        uses: tahminator/pipeline/actions/setup@52eb2a0451daba94989db6a6fa232e689144aa50 # 1.0.96
         with:
+          LINT_CI: true
           SECRETS: ${{ toJSON(secrets) }}
 
       - name: Build image
@@ -144,8 +148,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup pipeline
-        uses: tahminator/pipeline/actions/setup@8601c1c7d28289879772574a60fe817fb953eeee # 1.0.93
+        uses: tahminator/pipeline/actions/setup@52eb2a0451daba94989db6a6fa232e689144aa50 # 1.0.96
         with:
+          LINT_CI: true
           SECRETS: ${{ toJSON(secrets) }}
 
       - name: Create new tag

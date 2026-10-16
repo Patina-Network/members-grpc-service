@@ -17,8 +17,7 @@ const { originalTag, newGithubTag, arch } = await yargs(hideBin(process.argv))
   })
   .option("arch", {
     choices: ARCHITECTURES,
-    describe:
-      "Image architecture to promote. Must match the runner's architecture",
+    describe: "Image architecture to promote. Must match the runner's architecture",
     default: "amd64" as const,
   })
   .strict()

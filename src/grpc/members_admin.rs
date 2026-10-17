@@ -103,6 +103,15 @@ impl members_admin_service_server::MembersAdminService for MembersAdminService {
         authorize(&request)?;
         let input = request.into_inner();
         required(&input.member_id, "member_id")?;
+        if let Some(value) = &input.email {
+            required(value, "email")?;
+        }
+        if let Some(value) = &input.first_name {
+            required(value, "first_name")?;
+        }
+        if let Some(value) = &input.last_name {
+            required(value, "last_name")?;
+        }
         let joined = timestamp(input.joined_at.as_ref())?;
         let stored = self
             .repository

@@ -126,6 +126,31 @@ async fn authorization_and_validation_precede_database_access() {
 }
 
 #[tokio::test]
+async fn update_rejects_blank_email_and_names_before_database_access() {
+    let pool = PgPoolOptions::new()
+        .connect_lazy("postgres://localhost/unused")
+        .unwrap();
+    pool.close().await;
+    let service = MembersAdminService::new(MembersAdminRepository::new(pool));
+    for field in ["email", "first_name", "last_name"] {
+        for blank in ["", " \t\n "] {
+            let mut input = UpdateMemberRequest {
+                member_id: "00000000-0000-0000-0000-000000000001".into(),
+                ..Default::default()
+            };
+            match field {
+                "email" => input.email = Some(blank.into()),
+                "first_name" => input.first_name = Some(blank.into()),
+                _ => input.last_name = Some(blank.into()),
+            }
+            let error = service.update_member(admin(input)).await.unwrap_err();
+            assert_eq!(error.code(), Code::InvalidArgument);
+            assert_eq!(error.message(), format!("{field} is required"));
+        }
+    }
+}
+
+#[tokio::test]
 #[ignore = "requires a disposable Postgres database and DATABASE_* environment variables"]
 async fn stored_writes_and_atomic_events() {
     let config = Config::from_env().unwrap();
@@ -285,6 +310,16 @@ async fn stored_writes_and_atomic_events() {
     assert!(archived.archived_at.is_some());
     assert_eq!(archived.archived_at, archived.updated_at);
     assert_eq!(archived.first_name, updated.first_name);
+    let retried = service
+        .archive_member(admin(ArchiveMemberRequest {
+            member_id: archived.member_id.clone(),
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .member
+        .unwrap();
+    assert_eq!(retried, archived);
     let count: i64 = sqlx::query_scalar(r#"SELECT count(*) FROM "Member""#)
         .fetch_one(&pool)
         .await

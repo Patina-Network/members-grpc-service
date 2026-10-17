@@ -99,15 +99,25 @@ impl MembersAdminRepository {
         let mut tx = self.pool.begin().await?;
         let sql = format!(
             r#"UPDATE "Member" SET "archivedAt" = statement_timestamp(), "updatedAt" = statement_timestamp()
-            WHERE id = $1::uuid RETURNING {RETURNING}"#
+            WHERE id = $1::uuid AND "archivedAt" IS NULL RETURNING {RETURNING}"#
         );
-        let stored = member(
-            sqlx::query(&sql)
-                .bind(input.member_id)
-                .fetch_optional(&mut *tx)
-                .await?
-                .ok_or(sqlx::Error::RowNotFound)?,
-        )?;
+        let updated = sqlx::query(&sql)
+            .bind(&input.member_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+        let Some(row) = updated else {
+            let sql = format!(r#"SELECT {RETURNING} FROM "Member" WHERE id = $1::uuid"#);
+            let existing = member(
+                sqlx::query(&sql)
+                    .bind(&input.member_id)
+                    .fetch_optional(&mut *tx)
+                    .await?
+                    .ok_or(sqlx::Error::RowNotFound)?,
+            )?;
+            tx.commit().await?;
+            return Ok(existing);
+        };
+        let stored = member(row)?;
         publish(
             &mut tx,
             "MemberArchived",

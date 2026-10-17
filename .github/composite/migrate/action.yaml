@@ -6,4 +6,6 @@ runs:
   steps:
     - name: Apply migrations
       shell: bash
+      env:
+        APPLY_REPEATED_MIGRATIONS: "false"
       run: just migrate up

@@ -16,7 +16,7 @@ async function main() {
     DATABASE_USER: user,
     DATABASE_PASSWORD: password,
     DATABASE_SSLMODE: "disable",
-  })`just migrate up && just migrate up && just migrate down -all && just migrate up`;
+  })`just migrate up && just migrate up && just migrate down -all && just migrate up && cargo test --locked --test members_api postgres_member_reads -- --ignored`;
 }
 
 await main();

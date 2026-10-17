@@ -1,5 +1,3 @@
--- Local mock members. Apply with `just seed`.
--- Staging and production run `just migrate`, which only reads db/migration.
 DELETE FROM "Member"
 WHERE id IN (
     '00000000-0000-4000-8000-000000000001',

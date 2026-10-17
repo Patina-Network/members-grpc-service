@@ -14,7 +14,7 @@ service MembersService {
 }
 
 message Member {
-  string member_id = 1;
+  int32 member_id = 1;
   string email = 2;
   string first_name = 3;
   string last_name = 4;
@@ -27,7 +27,7 @@ message Member {
 
 message GetMemberRequest {
   oneof identifier {
-    string member_id = 1;
+    int32 member_id = 1;
     string email = 2;
     string discord_id = 3;
   }

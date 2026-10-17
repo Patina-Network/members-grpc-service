@@ -1,11 +1,9 @@
 use chrono::{DateTime, Utc};
-use sqlx::{PgPool, Postgres, QueryBuilder};
-use uuid::Uuid;
+use sqlx::PgPool;
 
-#[derive(Debug, sqlx::FromRow)]
-#[sqlx(rename_all = "camelCase")]
+#[derive(Debug)]
 pub struct Member {
-    pub id: Uuid,
+    pub id: i32,
     pub email: String,
     pub first_name: String,
     pub last_name: String,
@@ -17,7 +15,7 @@ pub struct Member {
 }
 
 pub enum MemberIdentifier {
-    Id(Uuid),
+    Id(i32),
     Email(String),
     DiscordId(String),
 }
@@ -27,42 +25,122 @@ pub struct MembersRepository {
     pool: PgPool,
 }
 
-const SELECT_MEMBER: &str = r#"
-    SELECT id, email, "firstName", "lastName", "joinedAt",
-           "discordId", "discordUsername", "updatedAt", "archivedAt"
-    FROM "Member"
-"#;
-
 impl MembersRepository {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 
     pub async fn get(&self, identifier: MemberIdentifier) -> Result<Option<Member>, sqlx::Error> {
-        let mut query = QueryBuilder::<Postgres>::new(SELECT_MEMBER);
         match identifier {
-            MemberIdentifier::Id(id) => query.push(" WHERE id = ").push_bind(id),
-            MemberIdentifier::Email(email) => query.push(" WHERE email = ").push_bind(email),
-            MemberIdentifier::DiscordId(id) => query.push(" WHERE \"discordId\" = ").push_bind(id),
-        };
-        query.build_query_as().fetch_optional(&self.pool).await
+            MemberIdentifier::Id(id) => {
+                sqlx::query_as!(
+                    Member,
+                    r#"
+                    SELECT
+                        id,
+                        email,
+                        "firstName" AS first_name,
+                        "lastName" AS last_name,
+                        "joinedAt" AS joined_at,
+                        "discordId" AS discord_id,
+                        "discordUsername" AS discord_username,
+                        "updatedAt" AS updated_at,
+                        "archivedAt" AS archived_at
+                    FROM
+                        "Member"
+                    WHERE
+                        id = $1
+                    "#,
+                    id
+                )
+                .fetch_optional(&self.pool)
+                .await
+            }
+            MemberIdentifier::Email(email) => {
+                sqlx::query_as!(
+                    Member,
+                    r#"
+                    SELECT
+                        id,
+                        email,
+                        "firstName" AS first_name,
+                        "lastName" AS last_name,
+                        "joinedAt" AS joined_at,
+                        "discordId" AS discord_id,
+                        "discordUsername" AS discord_username,
+                        "updatedAt" AS updated_at,
+                        "archivedAt" AS archived_at
+                    FROM
+                        "Member"
+                    WHERE
+                        email = $1
+                    "#,
+                    email
+                )
+                .fetch_optional(&self.pool)
+                .await
+            }
+            MemberIdentifier::DiscordId(id) => {
+                sqlx::query_as!(
+                    Member,
+                    r#"
+                    SELECT
+                        id,
+                        email,
+                        "firstName" AS first_name,
+                        "lastName" AS last_name,
+                        "joinedAt" AS joined_at,
+                        "discordId" AS discord_id,
+                        "discordUsername" AS discord_username,
+                        "updatedAt" AS updated_at,
+                        "archivedAt" AS archived_at
+                    FROM
+                        "Member"
+                    WHERE
+                        "discordId" = $1
+                    "#,
+                    id
+                )
+                .fetch_optional(&self.pool)
+                .await
+            }
+        }
     }
 
     pub async fn list(
         &self,
         include_archived: bool,
-        after: Option<Uuid>,
+        after: Option<i32>,
         limit: i64,
     ) -> Result<Vec<Member>, sqlx::Error> {
-        let mut query = QueryBuilder::<Postgres>::new(SELECT_MEMBER);
-        query
-            .push(" WHERE (")
-            .push_bind(include_archived)
-            .push(" OR \"archivedAt\" IS NULL)");
-        if let Some(id) = after {
-            query.push(" AND id > ").push_bind(id);
-        }
-        query.push(" ORDER BY id ASC LIMIT ").push_bind(limit);
-        query.build_query_as().fetch_all(&self.pool).await
+        sqlx::query_as!(
+            Member,
+            r#"
+            SELECT
+                id,
+                email,
+                "firstName" AS first_name,
+                "lastName" AS last_name,
+                "joinedAt" AS joined_at,
+                "discordId" AS discord_id,
+                "discordUsername" AS discord_username,
+                "updatedAt" AS updated_at,
+                "archivedAt" AS archived_at
+            FROM
+                "Member"
+            WHERE
+                ($1 OR "archivedAt" IS NULL)
+                AND ($2::integer IS NULL OR id > $2)
+            ORDER BY
+                id ASC
+            LIMIT
+                $3
+            "#,
+            include_archived,
+            after,
+            limit
+        )
+        .fetch_all(&self.pool)
+        .await
     }
 }

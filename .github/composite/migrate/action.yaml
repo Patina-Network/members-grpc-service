@@ -1,11 +1,21 @@
 name: Migrate database
 description: Apply pending migrations using DATABASE_* environment variables
 
+inputs:
+  environment:
+    description: Target environment (staging or production)
+    required: true
+
 runs:
   using: composite
   steps:
     - name: Apply migrations
       shell: bash
       env:
-        APPLY_REPEATED_MIGRATIONS: "false"
-      run: just migrate up
+        MIGRATION_ENVIRONMENT: ${{ inputs.environment }}
+      run: |
+        case "$MIGRATION_ENVIRONMENT" in
+          staging) just migrate-stg up ;;
+          production) just migrate-prod up ;;
+          *) echo "Unsupported migration environment: $MIGRATION_ENVIRONMENT" >&2; exit 1 ;;
+        esac

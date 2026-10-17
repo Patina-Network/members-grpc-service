@@ -29,7 +29,6 @@ jobs:
         with:
           INSTALL_JUST: true
           INSTALL_MIGRATE: "true"
-          INSTALL_PROTOC: true
 
       - name: Test database migrations
         run: bun run .github/scripts/src/test/run-migration-tests.ts
@@ -43,16 +42,20 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup pipeline
-        uses: tahminator/pipeline/actions/setup@52eb2a0451daba94989db6a6fa232e689144aa50 # 1.0.96
+        uses: tahminator/pipeline/actions/setup@0d54deb9e9abab9530e4aa889a6c79c88a0ff5c7 # 1.0.99
         with:
           LINT_CI: true
           SECRETS: ${{ toJSON(secrets) }}
           INSTALL_JUST: true
           INSTALL_PROTOC: true
+          INSTALL_MIGRATE: "true"
           INSTALL_PNPM: true
           PNPM_VERSION: 11.11.0
           CARGO_PACKAGES: |
             cargo-tarpaulin@0.37.2
+
+      - name: Install SQLx CLI
+        run: cargo install sqlx-cli --version 0.9.0 --locked --no-default-features --features postgres,rustls
 
       - name: Run Tests
         uses: ./.github/composite/test

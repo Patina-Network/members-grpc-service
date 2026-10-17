@@ -5,19 +5,5 @@
   "ignore": [
     "node_modules",
     ".git"
-  ],
-  "protobuf": {
-    "importPaths": [
-      {
-        "path": "../proto",
-        "enabled": true
-      }
-    ],
-    "protoFiles": [
-      {
-        "path": "../proto/v1/members.proto",
-        "type": "file"
-      }
-    ]
-  }
+  ]
 }

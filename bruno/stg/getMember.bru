@@ -7,7 +7,6 @@ meta {
 grpc {
   url: grpcs://stg.members-grpc-service.vpn.patinanetwork.org:50051
   method: /members.MembersService/getMember
-  protoPath: ../proto/v1/members.proto
   body: grpc
   auth: none
   methodType: unary
@@ -17,7 +16,7 @@ body:grpc {
   name: message 1
   content: '''
     {
-      "member_id": "00000000-0000-4000-8000-000000000001"
+      "member_id": 1
     }
   '''
 }

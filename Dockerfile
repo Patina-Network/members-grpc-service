@@ -10,7 +10,7 @@ COPY src ./src
 
 RUN cargo build --release --locked
 
-FROM mirror.gcr.io/library/alpine:3.23.3 AS server-runtime
+FROM mirror.gcr.io/library/alpine:3.24.2 AS server-runtime
 
 RUN addgroup -g 10001 -S grpc-server \
   && adduser -u 10001 -S -G grpc-server -h /app grpc-server

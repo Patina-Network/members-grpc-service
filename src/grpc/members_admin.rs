@@ -1,38 +1,139 @@
 use tonic::{Request, Response, Status};
 
-use crate::proto::members::admin::{
-    ArchiveMemberRequest, ArchiveMemberResponse, BulkMemberOperationsRequest,
-    BulkMemberOperationsResponse, CreateMemberRequest, CreateMemberResponse, UpdateMemberRequest,
-    UpdateMemberResponse, members_admin_service_server,
+use crate::{
+    db::members_admin::MembersAdminRepository,
+    proto::members::admin::{
+        ArchiveMemberRequest, ArchiveMemberResponse, BulkMemberOperationsRequest,
+        BulkMemberOperationsResponse, CreateMemberRequest, CreateMemberResponse,
+        UpdateMemberRequest, UpdateMemberResponse, members_admin_service_server,
+    },
 };
 
-// main will need this
 pub use members_admin_service_server::MembersAdminServiceServer;
 
-#[derive(Debug, Default)]
-pub struct MembersAdminService;
+pub struct MembersAdminService {
+    repository: MembersAdminRepository,
+}
+
+impl MembersAdminService {
+    pub fn new(repository: MembersAdminRepository) -> Self {
+        Self { repository }
+    }
+}
+
+fn authorize<T>(request: &Request<T>) -> Result<(), Status> {
+    let mut profiles = request.metadata().get_all("profile").iter();
+    if profiles.next().and_then(|value| value.to_str().ok()) != Some("core_admin")
+        || profiles.next().is_some()
+    {
+        return Err(Status::permission_denied("PROFILE=core_admin is required"));
+    }
+    Ok(())
+}
+
+fn required(value: &str, field: &str) -> Result<(), Status> {
+    if value.trim().is_empty() {
+        return Err(Status::invalid_argument(format!("{field} is required")));
+    }
+    Ok(())
+}
+
+fn timestamp(value: Option<&prost_types::Timestamp>) -> Result<Option<i64>, Status> {
+    value
+        .map(|v| {
+            if !(-62_135_596_800..=253_402_300_799).contains(&v.seconds)
+                || !(0..1_000_000_000).contains(&v.nanos)
+            {
+                return Err(Status::invalid_argument("joined_at is invalid"));
+            }
+            Ok(v.seconds * 1_000_000 + i64::from(v.nanos / 1000))
+        })
+        .transpose()
+}
+
+fn db_error(error: sqlx::Error) -> Status {
+    match &error {
+        sqlx::Error::RowNotFound => Status::not_found("member not found"),
+        sqlx::Error::Database(db) if db.is_unique_violation() => {
+            Status::already_exists("email or discord_id already exists")
+        }
+        _ => crate::grpc::database_status(error),
+    }
+}
+
+fn member_id(value: i32) -> Result<(), Status> {
+    if value <= 0 {
+        return Err(Status::invalid_argument(
+            "member_id must be a positive integer",
+        ));
+    }
+    Ok(())
+}
 
 #[tonic::async_trait]
 impl members_admin_service_server::MembersAdminService for MembersAdminService {
     async fn create_member(
         &self,
-        _request: Request<CreateMemberRequest>,
+        request: Request<CreateMemberRequest>,
     ) -> Result<Response<CreateMemberResponse>, Status> {
-        unimplemented!("members.admin.MembersAdminService/createMember")
+        authorize(&request)?;
+        let input = request.into_inner();
+        required(&input.email, "email")?;
+        required(&input.first_name, "first_name")?;
+        required(&input.last_name, "last_name")?;
+        let joined = timestamp(input.joined_at.as_ref())?;
+        let stored = self
+            .repository
+            .create_member(input, joined)
+            .await
+            .map_err(db_error)?;
+        Ok(Response::new(CreateMemberResponse {
+            member: Some(stored),
+        }))
     }
 
     async fn update_member(
         &self,
-        _request: Request<UpdateMemberRequest>,
+        request: Request<UpdateMemberRequest>,
     ) -> Result<Response<UpdateMemberResponse>, Status> {
-        unimplemented!("members.admin.MembersAdminService/updateMember")
+        authorize(&request)?;
+        let input = request.into_inner();
+        member_id(input.member_id)?;
+        if let Some(value) = &input.email {
+            required(value, "email")?;
+        }
+        if let Some(value) = &input.first_name {
+            required(value, "first_name")?;
+        }
+        if let Some(value) = &input.last_name {
+            required(value, "last_name")?;
+        }
+        let joined = timestamp(input.joined_at.as_ref())?;
+        let stored = self
+            .repository
+            .update_member(input, joined)
+            .await
+            .map_err(db_error)?;
+        Ok(Response::new(UpdateMemberResponse {
+            member: Some(stored),
+        }))
     }
 
     async fn archive_member(
         &self,
-        _request: Request<ArchiveMemberRequest>,
+        request: Request<ArchiveMemberRequest>,
     ) -> Result<Response<ArchiveMemberResponse>, Status> {
-        unimplemented!("members.admin.MembersAdminService/archiveMember")
+        authorize(&request)?;
+        let input = request.into_inner();
+        member_id(input.member_id)?;
+        let stored = self
+            .repository
+            .archive_member(input)
+            .await
+            .map_err(db_error)?;
+        Ok(Response::new(ArchiveMemberResponse {
+            member: Some(stored),
+        }))
     }
 
     async fn bulk_member_operations(
@@ -42,3 +143,6 @@ impl members_admin_service_server::MembersAdminService for MembersAdminService {
         unimplemented!("members.admin.MembersAdminService/bulkMemberOperations")
     }
 }
+
+#[cfg(test)]
+mod tests;

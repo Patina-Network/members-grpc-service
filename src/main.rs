@@ -8,7 +8,10 @@ use tracing::info;
 
 use members_grpc_service::{
     config::Config,
-    db::{client::connect, health_check::HealthCheckRepository, members::MembersRepository},
+    db::{
+        client::connect, health_check::HealthCheckRepository, members::MembersRepository,
+        members_admin::MembersAdminRepository,
+    },
     grpc::members::{MembersService, MembersServiceServer},
     grpc::members_admin::{MembersAdminService, MembersAdminServiceServer},
     grpc::metrics::GrpcRequestMetricsMiddleware,
@@ -90,13 +93,14 @@ async fn main() -> anyhow::Result<()> {
     });
 
     info!(addr = %grpc_addr, "starting grpc server");
+    let admin_service = MembersAdminService::new(MembersAdminRepository::new(db.clone()));
     let grpc_server = tokio::spawn(async move {
         Server::builder()
             .layer(grpc_panic_layer)
             .layer(MiddlewareLayer::new(GrpcRequestMetricsMiddleware))
             .add_service(grpc_health_svc)
             .add_service(MembersServiceServer::new(members_service))
-            .add_service(MembersAdminServiceServer::new(MembersAdminService))
+            .add_service(MembersAdminServiceServer::new(admin_service))
             .add_optional_service(grpc_reflection_svc)
             .add_optional_service(grpc_reflection_svc2)
             .serve(grpc_addr)

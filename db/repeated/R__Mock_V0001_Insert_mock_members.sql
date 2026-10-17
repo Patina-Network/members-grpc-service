@@ -1,0 +1,91 @@
+-- Local mock members. Apply with `just seed`.
+-- Staging and production run `just migrate`, which only reads db/migration.
+DELETE FROM "Member"
+WHERE id IN (
+    '00000000-0000-4000-8000-000000000001',
+    '00000000-0000-4000-8000-000000000002',
+    '00000000-0000-4000-8000-000000000003',
+    '00000000-0000-4000-8000-000000000004',
+    '00000000-0000-4000-8000-000000000005'
+)
+OR email IN (
+    'member1@example.com',
+    'member2@example.com',
+    'member3@example.com',
+    'member4@example.com',
+    'member5@example.com'
+)
+OR "discordId" IN (
+    'local-discord-1',
+    'local-discord-2',
+    'local-discord-3',
+    'local-discord-4',
+    'local-discord-5'
+);
+
+INSERT INTO "Member" (
+    id,
+    email,
+    "firstName",
+    "lastName",
+    "joinedAt",
+    "discordId",
+    "discordUsername",
+    "updatedAt",
+    "archivedAt"
+) VALUES
+    (
+        '00000000-0000-4000-8000-000000000001',
+        'member1@example.com',
+        'Member',
+        'One',
+        '2026-01-02T03:04:05.123456Z',
+        'local-discord-1',
+        'member-one',
+        '2026-02-03T04:05:06.654321Z',
+        NULL
+    ),
+    (
+        '00000000-0000-4000-8000-000000000002',
+        'member2@example.com',
+        'Member',
+        'Two',
+        '2026-01-03T03:04:05Z',
+        'local-discord-2',
+        'member-two',
+        '2026-02-04T04:05:06Z',
+        NULL
+    ),
+    (
+        '00000000-0000-4000-8000-000000000003',
+        'member3@example.com',
+        'Member',
+        'Three',
+        '2026-01-04T03:04:05Z',
+        'local-discord-3',
+        'member-three',
+        '2026-02-05T04:05:06Z',
+        NULL
+    ),
+    (
+        '00000000-0000-4000-8000-000000000004',
+        'member4@example.com',
+        'Member',
+        'Four',
+        '2026-01-05T03:04:05Z',
+        'local-discord-4',
+        'member-four',
+        '2026-02-06T04:05:06Z',
+        NULL
+    ),
+    (
+        '00000000-0000-4000-8000-000000000005',
+        'member5@example.com',
+        'Member',
+        'Five',
+        '2026-01-06T03:04:05Z',
+        'local-discord-5',
+        'member-five',
+        '2026-02-07T04:05:06Z',
+        '2026-03-04T05:06:07Z'
+    );

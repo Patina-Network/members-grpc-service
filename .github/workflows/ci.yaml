@@ -29,6 +29,7 @@ jobs:
         with:
           INSTALL_JUST: true
           INSTALL_MIGRATE: "true"
+          INSTALL_PROTOC: true
 
       - name: Test database migrations
         run: bun run .github/scripts/src/test/run-migration-tests.ts

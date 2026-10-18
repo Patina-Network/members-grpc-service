@@ -18,12 +18,6 @@ migrate-ci *args="up":
 seed *args="up":
     dotenvx run -f .env -- just _seed {{ args }}
 
-seed-stg *args="up":
-    @just _seed {{ args }}
-
-seed-prod *args="up":
-    @just _seed {{ args }}
-
 seed-ci *args="up":
     @just _seed {{ args }}
 

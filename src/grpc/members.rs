@@ -4,6 +4,7 @@ use tonic::{Request, Response, Status};
 
 use crate::{
     db::members::{Member as StoredMember, MemberIdentifier, MembersRepository},
+    grpc::{database_status, page::Page},
     proto::members::{
         GetMemberRequest, GetMemberResponse, ListMembersRequest, ListMembersResponse, Member,
         get_member_request::Identifier, members_service_server,
@@ -11,9 +12,6 @@ use crate::{
 };
 
 pub use members_service_server::MembersServiceServer;
-
-const DEFAULT_PAGE_SIZE: i32 = 50;
-const MAX_PAGE_SIZE: i32 = 100;
 
 pub struct MembersService {
     repository: MembersRepository,
@@ -41,6 +39,11 @@ impl members_service_server::MembersService for MembersService {
             Some(Identifier::Email(email)) if email_address::EmailAddress::is_valid(&email) => {
                 MemberIdentifier::Email(email)
             }
+            Some(Identifier::Email(_)) => {
+                return Err(Status::invalid_argument(
+                    "email must be a valid email address",
+                ));
+            }
             Some(Identifier::DiscordId(id))
                 if !id.is_empty()
                     && id.bytes().all(|byte| byte.is_ascii_digit())
@@ -48,10 +51,13 @@ impl members_service_server::MembersService for MembersService {
             {
                 MemberIdentifier::DiscordId(id)
             }
-            _ => {
+            Some(Identifier::DiscordId(_)) => {
                 return Err(Status::invalid_argument(
-                    "a non-empty member identifier is required",
+                    "discord_id must be a positive unsigned 64-bit integer containing only digits",
                 ));
+            }
+            None => {
+                return Err(Status::invalid_argument("a member identifier is required"));
             }
         };
         let member = self
@@ -59,7 +65,7 @@ impl members_service_server::MembersService for MembersService {
             .get(identifier)
             .await
             .map_err(database_status)?
-            .ok_or_else(|| Status::not_found("member not found"))?;
+            .ok_or(Status::not_found("member not found"))?;
 
         Ok(GetMemberResponse {
             member: Some(member.into()),
@@ -72,66 +78,23 @@ impl members_service_server::MembersService for MembersService {
         request: Request<ListMembersRequest>,
     ) -> Result<Response<ListMembersResponse>, Status> {
         let request = request.into_inner();
-        let page_size = match request.page_size {
-            size if size < 0 => {
-                return Err(Status::invalid_argument("page_size must not be negative"));
-            }
-            0 => DEFAULT_PAGE_SIZE,
-            size => size.min(MAX_PAGE_SIZE),
-        } as usize;
-        let after = decode_page_token(&request.page_token, request.include_archived)?;
-        let mut members = self
+        let page = Page::new(
+            request.page_size,
+            &request.page_token,
+            if request.include_archived { "1" } else { "0" },
+        )?;
+        let members = self
             .repository
-            .list(request.include_archived, after, page_size as i64 + 1)
+            .list(request.include_archived, page.after(), page.fetch_limit())
             .await
             .map_err(database_status)?;
-
-        let next_page_token = if members.len() > page_size {
-            members.truncate(page_size);
-            encode_page_token(members[page_size - 1].id, request.include_archived)
-        } else {
-            String::new()
-        };
+        let (members, next_page_token) = page.finish(members, |member| member.id);
 
         Ok(ListMembersResponse {
             members: members.into_iter().map(Into::into).collect(),
             next_page_token,
         }
         .into())
-    }
-}
-
-fn encode_page_token(id: i32, include_archived: bool) -> String {
-    format!("{}:{id}", u8::from(include_archived))
-}
-
-fn decode_page_token(token: &str, include_archived: bool) -> Result<Option<i32>, Status> {
-    if token.is_empty() {
-        return Ok(None);
-    }
-    let invalid = || Status::invalid_argument("invalid page_token for this request");
-    let (filter, id) = token.split_once(':').ok_or_else(invalid)?;
-    if filter != if include_archived { "1" } else { "0" }
-        || id.is_empty()
-        || !id.bytes().all(|byte| byte.is_ascii_digit())
-    {
-        return Err(invalid());
-    }
-    let id = id.parse::<i32>().map_err(|_| invalid())?;
-    if id <= 0 {
-        return Err(invalid());
-    }
-    Ok(Some(id))
-}
-
-fn database_status(error: sqlx::Error) -> Status {
-    tracing::error!(%error, "member query failed");
-    match error {
-        sqlx::Error::PoolClosed
-        | sqlx::Error::PoolTimedOut
-        | sqlx::Error::Io(_)
-        | sqlx::Error::Tls(_) => Status::unavailable("member storage unavailable"),
-        _ => Status::internal("failed to query members"),
     }
 }
 
@@ -171,39 +134,6 @@ mod tests {
             .unwrap();
         pool.close().await;
         MembersService::new(MembersRepository::new(pool))
-    }
-
-    #[test]
-    fn page_tokens_are_readable_and_validate_filter_and_integer_range() {
-        assert_eq!(decode_page_token("", false).unwrap(), None);
-        for include_archived in [false, true] {
-            for id in [1, 10, i32::MAX] {
-                let token = encode_page_token(id, include_archived);
-                assert_eq!(token, format!("{}:{id}", u8::from(include_archived)));
-                assert_eq!(
-                    decode_page_token(&token, include_archived).unwrap(),
-                    Some(id)
-                );
-                assert!(decode_page_token(&token, !include_archived).is_err());
-            }
-        }
-        for token in [
-            "0:0",
-            "0:-1",
-            "0:+1",
-            "0:2147483648",
-            "0:",
-            "0:1:2",
-            "0: 1",
-            "2:1",
-            "1",
-            "0:1.5",
-        ] {
-            assert_eq!(
-                decode_page_token(token, false).unwrap_err().code(),
-                Code::InvalidArgument
-            );
-        }
     }
 
     #[tokio::test]
@@ -328,7 +258,7 @@ mod tests {
                 ..Default::default()
             },
             ListMembersRequest {
-                page_token: encode_page_token(1, true),
+                page_token: "1:1".into(),
                 include_archived: false,
                 ..Default::default()
             },
@@ -342,6 +272,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn invalid_identifiers_report_the_field_and_reason() {
+        let service = disconnected_service().await;
+        for (identifier, message) in [
+            (None, "a member identifier is required"),
+            (
+                Some(Identifier::MemberId(0)),
+                "member_id must be a positive integer",
+            ),
+            (
+                Some(Identifier::Email("invalid".into())),
+                "email must be a valid email address",
+            ),
+            (
+                Some(Identifier::DiscordId("abc".into())),
+                "discord_id must be a positive unsigned 64-bit integer containing only digits",
+            ),
+        ] {
+            let error = service
+                .get_member(Request::new(GetMemberRequest { identifier }))
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), Code::InvalidArgument);
+            assert_eq!(error.message(), message);
+        }
+    }
+
+    #[tokio::test]
     async fn database_errors_return_sanitized_statuses() {
         let service = disconnected_service().await;
         let error = service
@@ -351,7 +308,7 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.code(), Code::Unavailable);
-        assert_eq!(error.message(), "member storage unavailable");
+        assert_eq!(error.message(), "database unavailable");
 
         let error = service
             .list_members(Request::new(ListMembersRequest::default()))
@@ -361,7 +318,7 @@ mod tests {
 
         let error = database_status(sqlx::Error::ColumnNotFound("private column".into()));
         assert_eq!(error.code(), Code::Internal);
-        assert_eq!(error.message(), "failed to query members");
+        assert_eq!(error.message(), "database operation failed");
     }
 
     #[test]

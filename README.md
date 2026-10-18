@@ -38,9 +38,9 @@ just dev
 ```
 
 Staging uses `just migrate-stg`, production uses `just migrate-prod`, and CI
-uses `just migrate-ci`. Their seed equivalents are `seed-stg`, `seed-prod`, and
-`seed-ci`. These commands use exported `DATABASE_*` variables and never load
-env files or fall back to example credentials. Migration commands accept arguments,
+uses `just migrate-ci`. Only local development (`seed`) and CI (`seed-ci`) have
+seed commands. Staging, production, and CI migration commands use exported
+`DATABASE_*` variables and never load env files or fall back to example credentials. Migration commands accept arguments,
 for example `just migrate down 1`.
 
 Cargo uses SQLx offline mode by default, so builds, tests, and linting need no

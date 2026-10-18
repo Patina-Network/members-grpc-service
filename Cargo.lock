@@ -1247,6 +1247,7 @@ dependencies = [
  "prost",
  "prost-types",
  "sqlx",
+ "thiserror",
  "tokio",
  "tonic",
  "tonic-health",

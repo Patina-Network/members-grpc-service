@@ -46,8 +46,8 @@ for example `just migrate down 1`.
 Cargo uses SQLx offline mode by default, so builds, tests, and linting need no
 running database. After changing SQL or migrations, run `just sqlx-prepare-local`
 (with sqlx-cli 0.9.0 installed) and commit `.sqlx`. CI starts a fresh
-`LocalPostgresClient`, applies `db/all`, checks the cache with
-`cargo sqlx prepare --check`, and runs Rust checks with `SQLX_OFFLINE=false`.
+`LocalPostgresClient`, applies `db/all`, generates the ignored SQLx metadata with
+`cargo sqlx prepare`, and runs Rust checks with `SQLX_OFFLINE=false`.
 Image builds depend on that validation and use the validated offline cache.
 
 Member IDs are positive PostgreSQL `INTEGER` identities / protobuf `int32`.

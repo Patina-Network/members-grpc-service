@@ -25,7 +25,7 @@ async function main() {
   });
 
   await $`just migrate-ci up`;
-  await $`cargo sqlx prepare --check -- --locked --all-targets`;
+  await $`cargo sqlx prepare -- --locked --all-targets`;
 
   const sonarClient = new SonarScannerClient({
     auth: {

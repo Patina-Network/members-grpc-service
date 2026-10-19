@@ -23,9 +23,9 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            runner: ubuntu-latest
+            runner: ubuntu-26.04
           - arch: arm64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-26.04-arm
 
     steps:
       - name: Checkout Repository
@@ -53,7 +53,7 @@ jobs:
 
   deployToProduction:
     name: Deploy to Production
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [promoteImage]
     timeout-minutes: 20
 
@@ -91,7 +91,7 @@ jobs:
 
   buildAndDeployClients:
     name: Build and deploy gRPC clients
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Checkout Repository

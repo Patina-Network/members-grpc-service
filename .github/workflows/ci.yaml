@@ -18,7 +18,7 @@ concurrency:
 jobs:
   testMigrations:
     name: Test database migrations
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - name: Checkout Repository
@@ -35,7 +35,7 @@ jobs:
 
   test:
     name: Run Tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Checkout Repository
@@ -60,7 +60,7 @@ jobs:
 
   buildUploadClientsImageStaging:
     name: Build and upload beta gRPC clients
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [test, testMigrations]
 
     if: github.event_name == 'pull_request'
@@ -102,9 +102,9 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            runner: ubuntu-latest
+            runner: ubuntu-26.04
           - arch: arm64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-26.04-arm
 
     steps:
       - name: Checkout Repository
@@ -143,9 +143,9 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            runner: ubuntu-latest
+            runner: ubuntu-26.04
           - arch: arm64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-26.04-arm
 
     steps:
       - name: Checkout Repository
@@ -172,7 +172,7 @@ jobs:
 
   createTag:
     name: Create new tag
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [buildUploadServerImage]
 
     if: github.ref_name == 'main'

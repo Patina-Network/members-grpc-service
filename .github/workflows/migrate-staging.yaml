@@ -13,7 +13,7 @@ concurrency:
 jobs:
   migrate:
     name: Apply staging migrations from the selected ref
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - name: Checkout Repository

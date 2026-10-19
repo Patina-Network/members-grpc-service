@@ -1,0 +1,20 @@
+meta {
+  name: listMembers
+  type: grpc
+  seq: 2
+}
+
+grpc {
+  url: grpcs://stg.members-grpc-service.vpn.patinanetwork.org:50051
+  method: /members.MembersService/listMembers
+  body: grpc
+  auth: none
+  methodType: unary
+}
+
+body:grpc {
+  name: message 1
+  content: '''
+    {}
+  '''
+}

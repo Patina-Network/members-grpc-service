@@ -7,6 +7,8 @@ RUN apk add --no-cache musl-dev=1.2.6-r2 protobuf-dev=31.1-r1
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY proto ./proto
 COPY src ./src
+COPY .sqlx ./.sqlx
+COPY .cargo ./.cargo
 
 RUN cargo build --release --locked
 

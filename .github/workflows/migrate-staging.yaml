@@ -31,6 +31,8 @@ jobs:
 
       - name: Migrate staging database
         uses: ./.github/composite/migrate
+        with:
+          environment: staging
         env:
           DATABASE_HOST: ${{ secrets.STAGING_MIGRATION_DATABASE_HOST }}
           DATABASE_PORT: ${{ secrets.STAGING_MIGRATION_DATABASE_PORT }}

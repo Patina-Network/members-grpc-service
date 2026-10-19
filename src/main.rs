@@ -8,19 +8,13 @@ use tracing::info;
 
 use members_grpc_service::{
     config::Config,
-    db::{client::connect, health_check::HealthCheckRepository},
-};
-
-use crate::{
+    db::{client::connect, health_check::HealthCheckRepository, members::MembersRepository},
     grpc::members::{MembersService, MembersServiceServer},
     grpc::members_admin::{MembersAdminService, MembersAdminServiceServer},
     grpc::metrics::GrpcRequestMetricsMiddleware,
     http::{router, state::AppState},
+    proto,
 };
-
-mod grpc;
-mod http;
-mod proto;
 
 fn init_tracing() {
     let use_json = std::env::var("ENVIRONMENT")
@@ -56,6 +50,7 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::from_env()?;
     config.log();
     let db = connect(&config).await?;
+    let members_service = MembersService::new(MembersRepository::new(db.clone()));
 
     let grpc_addr = format!("0.0.0.0:{}", config.grpc_port).parse()?;
     let http_addr = format!("0.0.0.0:{}", config.http_port);
@@ -100,7 +95,7 @@ async fn main() -> anyhow::Result<()> {
             .layer(grpc_panic_layer)
             .layer(MiddlewareLayer::new(GrpcRequestMetricsMiddleware))
             .add_service(grpc_health_svc)
-            .add_service(MembersServiceServer::new(MembersService))
+            .add_service(MembersServiceServer::new(members_service))
             .add_service(MembersAdminServiceServer::new(MembersAdminService))
             .add_optional_service(grpc_reflection_svc)
             .add_optional_service(grpc_reflection_svc2)
@@ -108,12 +103,12 @@ async fn main() -> anyhow::Result<()> {
             .await
     });
 
-    let http_app_state = AppState::new(
-        &config,
-        prom_handle,
+    let http_app_state = AppState {
+        config,
+        prometheus_handle: prom_handle,
         sys_collector,
-        HealthCheckRepository::new(db),
-    );
+        health_check_repository: HealthCheckRepository::new(db),
+    };
 
     let http_listener = TcpListener::bind(&http_addr)
         .await

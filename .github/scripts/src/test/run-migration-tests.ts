@@ -16,7 +16,7 @@ async function main() {
     DATABASE_USER: user,
     DATABASE_PASSWORD: password,
     DATABASE_SSLMODE: "disable",
-  })`just migrate up && just migrate up && just migrate down -all && just migrate up`;
+  })`just migrate-ci up && just migrate-ci up && just seed-ci up && just seed-ci up && just migrate-ci down 1 && just migrate-ci up && just seed-ci down -all && just migrate-ci down -all && just migrate-ci up && just seed-ci up`;
 }
 
 await main();

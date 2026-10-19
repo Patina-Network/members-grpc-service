@@ -42,16 +42,18 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup pipeline
-        uses: tahminator/pipeline/actions/setup@52eb2a0451daba94989db6a6fa232e689144aa50 # 1.0.96
+        uses: tahminator/pipeline/actions/setup@aa4f2ffcca89a9dcad96c1eac1e57b5a533f8c26 # 1.0.100
         with:
           LINT_CI: true
           SECRETS: ${{ toJSON(secrets) }}
           INSTALL_JUST: true
           INSTALL_PROTOC: true
+          INSTALL_MIGRATE: "true"
           INSTALL_PNPM: true
           PNPM_VERSION: 11.11.0
           CARGO_PACKAGES: |
             cargo-tarpaulin@0.37.2
+            sqlx-cli@0.9.0 --no-default-features --features postgres,rustls
 
       - name: Run Tests
         uses: ./.github/composite/test
@@ -68,7 +70,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Pipeline
-        uses: tahminator/pipeline/actions/setup@52eb2a0451daba94989db6a6fa232e689144aa50 # 1.0.96
+        uses: tahminator/pipeline/actions/setup@aa4f2ffcca89a9dcad96c1eac1e57b5a533f8c26 # 1.0.100
         with:
           LINT_CI: true
           SECRETS: ${{ toJSON(secrets) }}
@@ -76,6 +78,12 @@ jobs:
           HEADSCALE_USER: ${{ secrets.HEADSCALE_USER }}
           HEADSCALE_PREAUTHKEY: ${{ secrets.HEADSCALE_PREAUTHKEY }}
           INSTALL_PROTO_DEPENDENCIES: true
+          INSTALL_JUST: true
+          INSTALL_MIGRATE: "true"
+          CARGO_PACKAGES: sqlx-cli@0.9.0 --no-default-features --features postgres,rustls
+
+      - name: Prepare SQLx metadata
+        run: bun run .github/scripts/src/prepare-sqlx.ts
 
       - name: Run Tests
         run: cargo test
@@ -103,7 +111,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Pipeline
-        uses: tahminator/pipeline/actions/setup@52eb2a0451daba94989db6a6fa232e689144aa50 # 1.0.96
+        uses: tahminator/pipeline/actions/setup@aa4f2ffcca89a9dcad96c1eac1e57b5a533f8c26 # 1.0.100
         with:
           LINT_CI: true
           SECRETS: ${{ toJSON(secrets) }}
@@ -111,6 +119,12 @@ jobs:
           HEADSCALE_USER: ${{ secrets.HEADSCALE_USER }}
           HEADSCALE_PREAUTHKEY: ${{ secrets.HEADSCALE_PREAUTHKEY }}
           INSTALL_PROTO_DEPENDENCIES: true
+          INSTALL_JUST: true
+          INSTALL_MIGRATE: "true"
+          CARGO_PACKAGES: sqlx-cli@0.9.0 --no-default-features --features postgres,rustls
+
+      - name: Prepare SQLx metadata
+        run: bun run .github/scripts/src/prepare-sqlx.ts
 
       - name: Run Tests
         run: cargo test
@@ -140,10 +154,16 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Setup pipeline
-        uses: tahminator/pipeline/actions/setup@52eb2a0451daba94989db6a6fa232e689144aa50 # 1.0.96
+        uses: tahminator/pipeline/actions/setup@aa4f2ffcca89a9dcad96c1eac1e57b5a533f8c26 # 1.0.100
         with:
           LINT_CI: true
+          INSTALL_JUST: true
+          INSTALL_MIGRATE: "true"
+          CARGO_PACKAGES: sqlx-cli@0.9.0 --no-default-features --features postgres,rustls
           SECRETS: ${{ toJSON(secrets) }}
+
+      - name: Prepare SQLx metadata
+        run: bun run .github/scripts/src/prepare-sqlx.ts
 
       - name: Build image
         uses: ./.github/composite/build-server

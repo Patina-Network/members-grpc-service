@@ -74,6 +74,8 @@ jobs:
 
       - name: Migrate production database
         uses: ./.github/composite/migrate
+        with:
+          environment: production
         env:
           DATABASE_HOST: ${{ secrets.PRODUCTION_MIGRATION_DATABASE_HOST }}
           DATABASE_PORT: ${{ secrets.PRODUCTION_MIGRATION_DATABASE_PORT }}

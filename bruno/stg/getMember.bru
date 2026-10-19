@@ -1,0 +1,22 @@
+meta {
+  name: getMember
+  type: grpc
+  seq: 1
+}
+
+grpc {
+  url: grpcs://stg.members-grpc-service.vpn.patinanetwork.org:50051
+  method: /members.MembersService/getMember
+  body: grpc
+  auth: none
+  methodType: unary
+}
+
+body:grpc {
+  name: message 1
+  content: '''
+    {
+      "member_id": 1
+    }
+  '''
+}

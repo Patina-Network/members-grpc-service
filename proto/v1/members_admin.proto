@@ -35,7 +35,7 @@ message CreateMemberRequest {
 message CreateMemberResponse { members.Member member = 1; }
 
 message UpdateMemberRequest {
-  string member_id = 1;
+  int32 member_id = 1;
   optional string email = 2;
   optional string first_name = 3;
   optional string last_name = 4;
@@ -46,7 +46,7 @@ message UpdateMemberRequest {
 
 message UpdateMemberResponse { members.Member member = 1; }
 
-message ArchiveMemberRequest { string member_id = 1; }
+message ArchiveMemberRequest { int32 member_id = 1; }
 
 message ArchiveMemberResponse { members.Member member = 1; }
 

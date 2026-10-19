@@ -1,0 +1,23 @@
+meta {
+  name: getMember
+  type: grpc
+  seq: 1
+}
+
+grpc {
+  url: localhost:50051
+  method: /members.MembersService/getMember
+  body: grpc
+  protoPath: ../proto/v1/members.proto
+  auth: none
+  methodType: unary
+}
+
+body:grpc {
+  name: message 1
+  content: '''
+    {
+      "member_id": 1
+    }
+  '''
+}

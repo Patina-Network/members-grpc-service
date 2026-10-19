@@ -2,6 +2,7 @@ src/proto
 
 /target
 .env
+.sqlx/
 
 clippy-report.json
 lcov.info

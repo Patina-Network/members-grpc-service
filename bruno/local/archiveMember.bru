@@ -1,0 +1,26 @@
+meta {
+  name: archiveMember
+  type: grpc
+  seq: 5
+}
+
+grpc {
+  url: localhost:50051
+  method: /members.admin.MembersAdminService/archiveMember
+  body: grpc
+  auth: none
+  methodType: unary
+}
+
+metadata {
+  profile: core_admin
+}
+
+body:grpc {
+  name: message 1
+  content: '''
+    {
+      "member_id": 1
+    }
+  '''
+}

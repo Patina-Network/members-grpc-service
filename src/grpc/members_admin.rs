@@ -4,8 +4,10 @@ use crate::{
     db::members_admin::MembersAdminRepository,
     proto::members::admin::{
         ArchiveMemberRequest, ArchiveMemberResponse, BulkMemberOperationsRequest,
-        BulkMemberOperationsResponse, CreateMemberRequest, CreateMemberResponse,
-        UpdateMemberRequest, UpdateMemberResponse, members_admin_service_server,
+        BulkMemberOperationsResponse, CreateMemberRequest, CreateMemberResponse, MemberCreated,
+        MemberOperation, MemberOperationFailed, MemberOperationResult, UpdateMemberRequest,
+        UpdateMemberResponse, member_operation::Operation, member_operation_result::Outcome,
+        members_admin_service_server,
     },
 };
 
@@ -18,6 +20,49 @@ pub struct MembersAdminService {
 impl MembersAdminService {
     pub fn new(repository: MembersAdminRepository) -> Self {
         Self { repository }
+    }
+
+    async fn apply_operation(&self, input: MemberOperation) -> Result<Outcome, Status> {
+        match input
+            .operation
+            .ok_or_else(|| Status::invalid_argument("operation is required"))?
+        {
+            Operation::Create(input) => {
+                let joined = validate_create(&input)?;
+                let stored = self
+                    .repository
+                    .create_member(input, joined)
+                    .await
+                    .map_err(db_error)?;
+                Ok(Outcome::Created(MemberCreated {
+                    member: Some(stored),
+                }))
+            }
+            Operation::Update(input) => {
+                let joined = validate_update(&input)?;
+                self.repository
+                    .update_operation(input, joined)
+                    .await
+                    .map_err(db_error)
+            }
+            Operation::Archive(input) => {
+                member_id(input.member_id)?;
+                self.repository
+                    .archive_operation(input)
+                    .await
+                    .map_err(db_error)
+            }
+            Operation::Upsert(input) => {
+                let input = input
+                    .member
+                    .ok_or_else(|| Status::invalid_argument("upsert member is required"))?;
+                let joined = validate_create(&input)?;
+                self.repository
+                    .upsert_member(input, joined)
+                    .await
+                    .map_err(db_error)
+            }
+        }
     }
 }
 
@@ -70,6 +115,27 @@ fn member_id(value: i32) -> Result<(), Status> {
     Ok(())
 }
 
+fn validate_create(input: &CreateMemberRequest) -> Result<Option<i64>, Status> {
+    required(&input.email, "email")?;
+    required(&input.first_name, "first_name")?;
+    required(&input.last_name, "last_name")?;
+    timestamp(input.joined_at.as_ref())
+}
+
+fn validate_update(input: &UpdateMemberRequest) -> Result<Option<i64>, Status> {
+    member_id(input.member_id)?;
+    if let Some(value) = &input.email {
+        required(value, "email")?;
+    }
+    if let Some(value) = &input.first_name {
+        required(value, "first_name")?;
+    }
+    if let Some(value) = &input.last_name {
+        required(value, "last_name")?;
+    }
+    timestamp(input.joined_at.as_ref())
+}
+
 #[tonic::async_trait]
 impl members_admin_service_server::MembersAdminService for MembersAdminService {
     async fn create_member(
@@ -78,10 +144,7 @@ impl members_admin_service_server::MembersAdminService for MembersAdminService {
     ) -> Result<Response<CreateMemberResponse>, Status> {
         authorize(&request)?;
         let input = request.into_inner();
-        required(&input.email, "email")?;
-        required(&input.first_name, "first_name")?;
-        required(&input.last_name, "last_name")?;
-        let joined = timestamp(input.joined_at.as_ref())?;
+        let joined = validate_create(&input)?;
         let stored = self
             .repository
             .create_member(input, joined)
@@ -98,17 +161,7 @@ impl members_admin_service_server::MembersAdminService for MembersAdminService {
     ) -> Result<Response<UpdateMemberResponse>, Status> {
         authorize(&request)?;
         let input = request.into_inner();
-        member_id(input.member_id)?;
-        if let Some(value) = &input.email {
-            required(value, "email")?;
-        }
-        if let Some(value) = &input.first_name {
-            required(value, "first_name")?;
-        }
-        if let Some(value) = &input.last_name {
-            required(value, "last_name")?;
-        }
-        let joined = timestamp(input.joined_at.as_ref())?;
+        let joined = validate_update(&input)?;
         let stored = self
             .repository
             .update_member(input, joined)
@@ -138,9 +191,28 @@ impl members_admin_service_server::MembersAdminService for MembersAdminService {
 
     async fn bulk_member_operations(
         &self,
-        _request: Request<BulkMemberOperationsRequest>,
+        request: Request<BulkMemberOperationsRequest>,
     ) -> Result<Response<BulkMemberOperationsResponse>, Status> {
-        unimplemented!("members.admin.MembersAdminService/bulkMemberOperations")
+        authorize(&request)?;
+        let operations = request.into_inner().operations;
+        u32::try_from(operations.len())
+            .map_err(|_| Status::invalid_argument("too many operations"))?;
+        let mut results = Vec::with_capacity(operations.len());
+        for (index, operation) in operations.into_iter().enumerate() {
+            let outcome = self
+                .apply_operation(operation)
+                .await
+                .unwrap_or_else(|status| {
+                    Outcome::Failed(MemberOperationFailed {
+                        error: format!("{}: {}", status.code(), status.message()),
+                    })
+                });
+            results.push(MemberOperationResult {
+                index: index as u32,
+                outcome: Some(outcome),
+            });
+        }
+        Ok(Response::new(BulkMemberOperationsResponse { results }))
     }
 }
 

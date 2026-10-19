@@ -1,1 +1,1 @@
-DROP TABLE member_events;
+DROP TABLE "MemberEvents";

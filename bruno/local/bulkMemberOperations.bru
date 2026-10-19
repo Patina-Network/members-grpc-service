@@ -1,0 +1,50 @@
+meta {
+  name: bulkMemberOperations
+  type: grpc
+  seq: 6
+}
+
+grpc {
+  url: localhost:50051
+  method: /members.admin.MembersAdminService/bulkMemberOperations
+  body: grpc
+  auth: none
+  methodType: unary
+}
+
+metadata {
+  profile: core_admin
+}
+
+body:grpc {
+  name: message 1
+  content: '''
+    {
+      "operations": [
+        {
+          "create": {
+            "email": "bulk-test@example.com",
+            "first_name": "Bulk",
+            "last_name": "Test"
+          }
+        },
+        {
+          "upsert": {
+            "member": {
+              "email": "bulk-test@example.com",
+              "first_name": "Updated",
+              "last_name": "Test"
+            }
+          }
+        },
+        {
+          "create": {
+            "email": "",
+            "first_name": "Invalid",
+            "last_name": "Test"
+          }
+        }
+      ]
+    }
+  '''
+}

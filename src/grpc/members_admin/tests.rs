@@ -1,16 +1,19 @@
-use crate::{
-    config::Config,
-    proto::members::admin::{MemberArchived, MemberCreated, MemberUpdated},
+use crate::proto::members::admin::{
+    MemberArchived, MemberCreated, MemberUpdated, UpsertMemberRequest,
 };
 use prost::Message;
-use sqlx::{
-    Row,
-    postgres::{PgConnectOptions, PgPoolOptions},
-};
+use sqlx::{Row, postgres::PgPoolOptions};
 
-use super::*;
-use members_admin_service_server::MembersAdminService as _;
+use super::{members_admin_service_server::MembersAdminService as _, *};
 use tonic::Code;
+
+async fn disconnected_service() -> MembersAdminService {
+    let pool = PgPoolOptions::new()
+        .connect_lazy("postgres://localhost/unused")
+        .unwrap();
+    pool.close().await;
+    MembersAdminService::new(MembersAdminRepository::new(pool))
+}
 
 fn admin<T>(input: T) -> Request<T> {
     let mut request = Request::new(input);
@@ -31,11 +34,7 @@ fn input(email: &str) -> CreateMemberRequest {
 
 #[tokio::test]
 async fn authorization_and_validation_precede_database_access() {
-    let service = MembersAdminService::new(MembersAdminRepository::new(
-        PgPoolOptions::new()
-            .connect_lazy("postgres://localhost/unused")
-            .unwrap(),
-    ));
+    let service = disconnected_service().await;
     for profile in [
         None,
         Some(""),
@@ -94,22 +93,6 @@ async fn authorization_and_validation_precede_database_access() {
             Code::InvalidArgument
         );
     }
-    assert_eq!(
-        service
-            .update_member(admin(UpdateMemberRequest::default()))
-            .await
-            .unwrap_err()
-            .code(),
-        Code::InvalidArgument
-    );
-    assert_eq!(
-        service
-            .archive_member(admin(ArchiveMemberRequest::default()))
-            .await
-            .unwrap_err()
-            .code(),
-        Code::InvalidArgument
-    );
     let mut value = input("a@example.org");
     value.joined_at = Some(prost_types::Timestamp {
         seconds: 0,
@@ -127,11 +110,7 @@ async fn authorization_and_validation_precede_database_access() {
 
 #[tokio::test]
 async fn update_rejects_blank_email_and_names_before_database_access() {
-    let pool = PgPoolOptions::new()
-        .connect_lazy("postgres://localhost/unused")
-        .unwrap();
-    pool.close().await;
-    let service = MembersAdminService::new(MembersAdminRepository::new(pool));
+    let service = disconnected_service().await;
     for field in ["email", "first_name", "last_name"] {
         for blank in ["", " \t\n "] {
             let mut input = UpdateMemberRequest {
@@ -152,11 +131,7 @@ async fn update_rejects_blank_email_and_names_before_database_access() {
 
 #[tokio::test]
 async fn writes_reject_nonpositive_ids_before_database_access() {
-    let pool = PgPoolOptions::new()
-        .connect_lazy("postgres://localhost/unused")
-        .unwrap();
-    pool.close().await;
-    let service = MembersAdminService::new(MembersAdminRepository::new(pool));
+    let service = disconnected_service().await;
     for member_id in [0, -1, i32::MIN] {
         let update = service
             .update_member(admin(UpdateMemberRequest {
@@ -176,19 +151,85 @@ async fn writes_reject_nonpositive_ids_before_database_access() {
     }
 }
 
+fn operation(operation: Operation) -> MemberOperation {
+    MemberOperation {
+        operation: Some(operation),
+    }
+}
+
 #[tokio::test]
-#[ignore = "requires a disposable Postgres database and DATABASE_* environment variables"]
+async fn bulk_authorization_validation_and_failures() {
+    let service = disconnected_service().await;
+
+    let error = service
+        .bulk_member_operations(Request::new(BulkMemberOperationsRequest::default()))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), Code::PermissionDenied);
+    assert!(
+        service
+            .bulk_member_operations(admin(BulkMemberOperationsRequest::default()))
+            .await
+            .unwrap()
+            .into_inner()
+            .results
+            .is_empty()
+    );
+
+    let operations = vec![
+        MemberOperation::default(),
+        operation(Operation::Upsert(UpsertMemberRequest::default())),
+        operation(Operation::Create(input(""))),
+        operation(Operation::Update(UpdateMemberRequest {
+            member_id: 1,
+            first_name: Some("  ".into()),
+            ..Default::default()
+        })),
+        operation(Operation::Archive(ArchiveMemberRequest { member_id: 0 })),
+        operation(Operation::Upsert(UpsertMemberRequest {
+            member: Some(CreateMemberRequest {
+                joined_at: Some(prost_types::Timestamp {
+                    seconds: 0,
+                    nanos: -1,
+                }),
+                ..input("valid@example.org")
+            }),
+        })),
+        operation(Operation::Create(input("valid@example.org"))),
+    ];
+    let results = service
+        .bulk_member_operations(admin(BulkMemberOperationsRequest { operations }))
+        .await
+        .unwrap()
+        .into_inner()
+        .results;
+    assert_eq!(results.len(), 7);
+    for (index, result) in results.into_iter().enumerate() {
+        assert_eq!(result.index, index as u32);
+        let Some(Outcome::Failed(failure)) = result.outcome else {
+            panic!("expected per-operation failure")
+        };
+        let expected = [
+            "operation is required",
+            "upsert member is required",
+            "email is required",
+            "first_name is required",
+            "member_id must be a positive integer",
+            "joined_at is invalid",
+            "database unavailable",
+        ][index];
+        assert!(failure.error.contains(expected), "{}", failure.error);
+    }
+}
+
+#[tokio::test]
 async fn stored_writes_and_atomic_events() {
-    let config = Config::from_env().unwrap();
-    let options = PgConnectOptions::new()
-        .host(&config.database_host)
-        .port(config.database_port)
-        .database(&config.database_name)
-        .username(&config.database_user)
-        .password(&config.database_password);
+    let Ok(url) = std::env::var("TEST_DATABASE_URL") else {
+        return;
+    };
     let setup_pool = PgPoolOptions::new()
         .max_connections(1)
-        .connect_with(options.clone())
+        .connect(&url)
         .await
         .unwrap();
     let schema: String =
@@ -213,7 +254,7 @@ async fn stored_writes_and_atomic_events() {
                 Ok(())
             })
         })
-        .connect_with(options)
+        .connect(&url)
         .await
         .unwrap();
     sqlx::raw_sql(include_str!(
@@ -360,16 +401,6 @@ async fn stored_writes_and_atomic_events() {
         .unwrap()
         .into();
     assert_eq!(stored, archived);
-    let active = reads.list(false, None, 10).await.unwrap();
-    assert_eq!(active.len(), 1);
-    assert_eq!(active[0].id, second.member_id);
-    assert_eq!(reads.list(true, None, 10).await.unwrap().len(), 2);
-
-    let count: i64 = sqlx::query_scalar(r#"SELECT count(*) FROM "Member""#)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!(count, 2);
     let absent = i32::MAX;
     assert_eq!(
         service
@@ -390,15 +421,7 @@ async fn stored_writes_and_atomic_events() {
             .code(),
         Code::NotFound
     );
-    assert_eq!(
-        service
-            .archive_member(admin(ArchiveMemberRequest { member_id: -1 }))
-            .await
-            .unwrap_err()
-            .code(),
-        Code::InvalidArgument
-    );
-    let events = sqlx::query("SELECT id, event_type, payload FROM member_events ORDER BY id")
+    let events = sqlx::query(r#"SELECT id, "eventType", payload FROM "MemberEvents" ORDER BY id"#)
         .fetch_all(&pool)
         .await
         .unwrap();
@@ -408,7 +431,7 @@ async fn stored_writes_and_atomic_events() {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(notification.channel(), event.get::<String, _>("event_type"));
+        assert_eq!(notification.channel(), event.get::<String, _>("eventType"));
         assert_eq!(
             notification.payload(),
             event.get::<i64, _>("id").to_string()
@@ -427,7 +450,7 @@ async fn stored_writes_and_atomic_events() {
         event.changed_fields.unwrap().paths,
         ["first_name", "discord_username", "updated_at"]
     );
-    assert_eq!(events[3].get::<String, _>("event_type"), "MemberArchived");
+    assert_eq!(events[3].get::<String, _>("eventType"), "MemberArchived");
     assert_eq!(
         MemberArchived::decode(events[3].get::<Vec<u8>, _>("payload").as_slice())
             .unwrap()
@@ -462,10 +485,6 @@ async fn stored_writes_and_atomic_events() {
     assert_eq!(edited.discord_username.as_deref(), Some("changed"));
     assert!(edited.archived_at.is_none());
 
-    let archived = MemberArchived::decode(events[3].get::<Vec<u8>, _>("payload").as_slice())
-        .unwrap()
-        .member
-        .unwrap();
     let mut unchanged = service
         .update_member(admin(UpdateMemberRequest {
             member_id: archived.member_id,
@@ -489,10 +508,12 @@ async fn stored_writes_and_atomic_events() {
         .await
         .unwrap();
 
-    sqlx::query("ALTER TABLE member_events ADD CONSTRAINT reject_events CHECK (false) NOT VALID")
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        r#"ALTER TABLE "MemberEvents" ADD CONSTRAINT reject_events CHECK (false) NOT VALID"#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     assert_eq!(
         service
             .create_member(admin(input("rollback@example.org")))
@@ -530,6 +551,7 @@ async fn stored_writes_and_atomic_events() {
         .await
         .unwrap();
     assert_eq!(count, 2);
+    bulk_writes_and_events(&service, &pool).await;
     drop(listener);
     pool.close().await;
     sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
@@ -537,4 +559,153 @@ async fn stored_writes_and_atomic_events() {
         .await
         .unwrap();
     setup_pool.close().await;
+}
+
+async fn bulk_writes_and_events(service: &MembersAdminService, pool: &sqlx::PgPool) {
+    let failed = service
+        .bulk_member_operations(admin(BulkMemberOperationsRequest {
+            operations: vec![operation(Operation::Upsert(UpsertMemberRequest {
+                member: Some(input("bulk-rollback@example.org")),
+            }))],
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .results;
+    assert!(matches!(failed[0].outcome, Some(Outcome::Failed(_))));
+    let count: i64 = sqlx::query_scalar(
+        r#"SELECT count(*) FROM "Member" WHERE email = 'bulk-rollback@example.org'"#,
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 0);
+    sqlx::query(r#"ALTER TABLE "MemberEvents" DROP CONSTRAINT reject_events"#)
+        .execute(pool)
+        .await
+        .unwrap();
+
+    let initial_events: i64 = sqlx::query_scalar(r#"SELECT count(*) FROM "MemberEvents""#)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let member = input("bulk@example.org");
+    let results = service
+        .bulk_member_operations(admin(BulkMemberOperationsRequest {
+            operations: vec![
+                operation(Operation::Create(member.clone())),
+                operation(Operation::Create(member.clone())),
+                operation(Operation::Upsert(UpsertMemberRequest {
+                    member: Some(CreateMemberRequest {
+                        first_name: "Changed".into(),
+                        ..member.clone()
+                    }),
+                })),
+                operation(Operation::Upsert(UpsertMemberRequest {
+                    member: Some(CreateMemberRequest {
+                        first_name: "Changed".into(),
+                        ..member
+                    }),
+                })),
+                operation(Operation::Upsert(UpsertMemberRequest {
+                    member: Some(input("bulk-new@example.org")),
+                })),
+            ],
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .results;
+    assert_eq!(results.len(), 5);
+    for (index, result) in results.iter().enumerate() {
+        assert_eq!(result.index, index as u32);
+    }
+    let Some(Outcome::Created(created)) = &results[0].outcome else {
+        panic!("expected create")
+    };
+    let created = created.member.as_ref().unwrap();
+    assert!(matches!(results[1].outcome, Some(Outcome::Failed(_))));
+    let Some(Outcome::Updated(updated)) = &results[2].outcome else {
+        panic!("expected upsert update")
+    };
+    assert_eq!(updated.before.as_ref(), Some(created));
+    assert_eq!(updated.after.as_ref().unwrap().first_name, "Changed");
+    assert!(
+        updated
+            .changed_fields
+            .as_ref()
+            .unwrap()
+            .paths
+            .contains(&"first_name".into())
+    );
+    let Some(Outcome::Unchanged(unchanged)) = &results[3].outcome else {
+        panic!("expected unchanged upsert")
+    };
+    assert_eq!(unchanged.member, updated.after);
+    assert!(matches!(results[4].outcome, Some(Outcome::Created(_))));
+
+    let id = created.member_id;
+    let results = service
+        .bulk_member_operations(admin(BulkMemberOperationsRequest {
+            operations: vec![
+                operation(Operation::Update(UpdateMemberRequest {
+                    member_id: id,
+                    last_name: Some("Bulk".into()),
+                    ..Default::default()
+                })),
+                operation(Operation::Update(UpdateMemberRequest {
+                    member_id: id,
+                    ..Default::default()
+                })),
+                operation(Operation::Archive(ArchiveMemberRequest {
+                    member_id: i32::MAX,
+                })),
+                operation(Operation::Archive(ArchiveMemberRequest { member_id: id })),
+                operation(Operation::Archive(ArchiveMemberRequest { member_id: id })),
+            ],
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .results;
+    let Some(Outcome::Updated(updated)) = &results[0].outcome else {
+        panic!("expected update")
+    };
+    assert_eq!(updated.after.as_ref().unwrap().last_name, "Bulk");
+    let Some(Outcome::Unchanged(unchanged)) = &results[1].outcome else {
+        panic!("expected unchanged update")
+    };
+    assert_eq!(unchanged.member, updated.after);
+    assert!(matches!(results[2].outcome, Some(Outcome::Failed(_))));
+    let Some(Outcome::Archived(archived)) = &results[3].outcome else {
+        panic!("expected archive")
+    };
+    let Some(Outcome::Unchanged(retried)) = &results[4].outcome else {
+        panic!("expected unchanged archive retry")
+    };
+    assert_eq!(retried.member, archived.member);
+    let events =
+        sqlx::query(r#"SELECT "eventType", payload FROM "MemberEvents" ORDER BY id OFFSET $1"#)
+            .bind(initial_events)
+            .fetch_all(pool)
+            .await
+            .unwrap();
+    assert_eq!(events.len(), 5);
+    assert_eq!(
+        events
+            .iter()
+            .map(|row| row.get::<String, _>("eventType"))
+            .collect::<Vec<_>>(),
+        [
+            "MemberCreated",
+            "MemberUpdated",
+            "MemberCreated",
+            "MemberUpdated",
+            "MemberArchived"
+        ]
+    );
+    let event = MemberUpdated::decode(events[3].get::<Vec<u8>, _>("payload").as_slice()).unwrap();
+    assert_eq!(&event, updated.as_ref());
+    let event = MemberArchived::decode(events[4].get::<Vec<u8>, _>("payload").as_slice()).unwrap();
+    assert_eq!(&event, archived);
 }

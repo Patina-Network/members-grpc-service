@@ -36,25 +36,13 @@ impl members_service_server::MembersService for MembersService {
                     "member_id must be a positive integer",
                 ));
             }
-            Some(Identifier::Email(email)) if email_address::EmailAddress::is_valid(&email) => {
+            Some(Identifier::Email(email)) => {
+                validate_email(&email)?;
                 MemberIdentifier::Email(email)
             }
-            Some(Identifier::Email(_)) => {
-                return Err(Status::invalid_argument(
-                    "email must be a valid email address",
-                ));
-            }
-            Some(Identifier::DiscordId(id))
-                if !id.is_empty()
-                    && id.bytes().all(|byte| byte.is_ascii_digit())
-                    && id.parse::<u64>().is_ok_and(|value| value > 0) =>
-            {
+            Some(Identifier::DiscordId(id)) => {
+                validate_discord_id(&id)?;
                 MemberIdentifier::DiscordId(id)
-            }
-            Some(Identifier::DiscordId(_)) => {
-                return Err(Status::invalid_argument(
-                    "discord_id must be a positive unsigned 64-bit integer containing only digits",
-                ));
             }
             None => {
                 return Err(Status::invalid_argument("a member identifier is required"));
@@ -119,6 +107,27 @@ fn timestamp(value: DateTime<Utc>) -> Timestamp {
         seconds: value.timestamp(),
         nanos: value.timestamp_subsec_nanos() as i32,
     }
+}
+
+pub(super) fn validate_email(value: &str) -> Result<(), Status> {
+    if !email_address::EmailAddress::is_valid(value) {
+        return Err(Status::invalid_argument(
+            "email must be a valid email address",
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn validate_discord_id(value: &str) -> Result<(), Status> {
+    if value.is_empty()
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+        || !value.parse::<u64>().is_ok_and(|v| v > 0)
+    {
+        return Err(Status::invalid_argument(
+            "discord_id must be a positive unsigned 64-bit integer containing only digits",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

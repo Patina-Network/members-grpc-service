@@ -1,12 +1,16 @@
+use prost::Message;
 use tonic::{Request, Response, Status};
 
+use super::members::{validate_discord_id, validate_email};
+
 use crate::{
-    db::members_admin::MembersAdminRepository,
+    db::members_admin::{CreateMember, MembersAdminRepository, OperationOutcome, UpdateMember},
     proto::members::admin::{
         ArchiveMemberRequest, ArchiveMemberResponse, BulkMemberOperationsRequest,
-        BulkMemberOperationsResponse, CreateMemberRequest, CreateMemberResponse, MemberCreated,
-        MemberOperation, MemberOperationFailed, MemberOperationResult, UpdateMemberRequest,
-        UpdateMemberResponse, member_operation::Operation, member_operation_result::Outcome,
+        BulkMemberOperationsResponse, CreateMemberRequest, CreateMemberResponse, MemberArchived,
+        MemberCreated, MemberOperation, MemberOperationFailed, MemberOperationResult,
+        MemberUnchanged, MemberUpdated, UpdateMemberRequest, UpdateMemberResponse,
+        member_operation::Operation, member_operation_result::Outcome,
         members_admin_service_server,
     },
 };
@@ -31,25 +35,27 @@ impl MembersAdminService {
                 let joined = validate_create(&input)?;
                 let stored = self
                     .repository
-                    .create_member(input, joined)
+                    .create_member(create_input(input, joined))
                     .await
                     .map_err(db_error)?;
                 Ok(Outcome::Created(MemberCreated {
-                    member: Some(stored),
+                    member: Some(stored.into()),
                 }))
             }
             Operation::Update(input) => {
                 let joined = validate_update(&input)?;
                 self.repository
-                    .update_operation(input, joined)
+                    .update_operation(update_input(input, joined))
                     .await
+                    .map(Into::into)
                     .map_err(db_error)
             }
             Operation::Archive(input) => {
                 member_id(input.member_id)?;
                 self.repository
-                    .archive_operation(input)
+                    .archive_operation(input.member_id)
                     .await
+                    .map(Into::into)
                     .map_err(db_error)
             }
             Operation::Upsert(input) => {
@@ -58,8 +64,9 @@ impl MembersAdminService {
                     .ok_or_else(|| Status::invalid_argument("upsert member is required"))?;
                 let joined = validate_create(&input)?;
                 self.repository
-                    .upsert_member(input, joined)
+                    .upsert_member(create_input(input, joined))
                     .await
+                    .map(Into::into)
                     .map_err(db_error)
             }
         }
@@ -117,6 +124,10 @@ fn member_id(value: i32) -> Result<(), Status> {
 
 fn validate_create(input: &CreateMemberRequest) -> Result<Option<i64>, Status> {
     required(&input.email, "email")?;
+    validate_email(&input.email)?;
+    if let Some(id) = &input.discord_id {
+        validate_discord_id(id)?;
+    }
     required(&input.first_name, "first_name")?;
     required(&input.last_name, "last_name")?;
     timestamp(input.joined_at.as_ref())
@@ -124,8 +135,12 @@ fn validate_create(input: &CreateMemberRequest) -> Result<Option<i64>, Status> {
 
 fn validate_update(input: &UpdateMemberRequest) -> Result<Option<i64>, Status> {
     member_id(input.member_id)?;
+    if let Some(id) = &input.discord_id {
+        validate_discord_id(id)?;
+    }
     if let Some(value) = &input.email {
         required(value, "email")?;
+        validate_email(value)?;
     }
     if let Some(value) = &input.first_name {
         required(value, "first_name")?;
@@ -147,12 +162,13 @@ impl members_admin_service_server::MembersAdminService for MembersAdminService {
         let joined = validate_create(&input)?;
         let stored = self
             .repository
-            .create_member(input, joined)
+            .create_member(create_input(input, joined))
             .await
             .map_err(db_error)?;
-        Ok(Response::new(CreateMemberResponse {
-            member: Some(stored),
-        }))
+        Ok(CreateMemberResponse {
+            member: Some(stored.into()),
+        }
+        .into())
     }
 
     async fn update_member(
@@ -164,12 +180,13 @@ impl members_admin_service_server::MembersAdminService for MembersAdminService {
         let joined = validate_update(&input)?;
         let stored = self
             .repository
-            .update_member(input, joined)
+            .update_member(update_input(input, joined))
             .await
             .map_err(db_error)?;
-        Ok(Response::new(UpdateMemberResponse {
-            member: Some(stored),
-        }))
+        Ok(UpdateMemberResponse {
+            member: Some(stored.into()),
+        }
+        .into())
     }
 
     async fn archive_member(
@@ -181,12 +198,13 @@ impl members_admin_service_server::MembersAdminService for MembersAdminService {
         member_id(input.member_id)?;
         let stored = self
             .repository
-            .archive_member(input)
+            .archive_member(input.member_id)
             .await
             .map_err(db_error)?;
-        Ok(Response::new(ArchiveMemberResponse {
-            member: Some(stored),
-        }))
+        Ok(ArchiveMemberResponse {
+            member: Some(stored.into()),
+        }
+        .into())
     }
 
     async fn bulk_member_operations(
@@ -212,7 +230,91 @@ impl members_admin_service_server::MembersAdminService for MembersAdminService {
                 outcome: Some(outcome),
             });
         }
-        Ok(Response::new(BulkMemberOperationsResponse { results }))
+        Ok(BulkMemberOperationsResponse { results }.into())
+    }
+}
+
+fn changed_fields(
+    before: &crate::proto::members::Member,
+    after: &crate::proto::members::Member,
+) -> prost_types::FieldMask {
+    let fields = [
+        ("email", before.email != after.email),
+        ("first_name", before.first_name != after.first_name),
+        ("last_name", before.last_name != after.last_name),
+        ("joined_at", before.joined_at != after.joined_at),
+        ("discord_id", before.discord_id != after.discord_id),
+        (
+            "discord_username",
+            before.discord_username != after.discord_username,
+        ),
+        ("updated_at", before.updated_at != after.updated_at),
+        ("archived_at", before.archived_at != after.archived_at),
+    ];
+    prost_types::FieldMask {
+        paths: fields
+            .into_iter()
+            .filter(|(_, changed)| *changed)
+            .map(|(field, _)| field.to_owned())
+            .collect(),
+    }
+}
+
+fn create_input(input: CreateMemberRequest, joined_at: Option<i64>) -> CreateMember {
+    CreateMember {
+        email: input.email,
+        first_name: input.first_name,
+        last_name: input.last_name,
+        joined_at,
+        discord_id: input.discord_id,
+        discord_username: input.discord_username,
+    }
+}
+
+fn update_input(input: UpdateMemberRequest, joined_at: Option<i64>) -> UpdateMember {
+    UpdateMember {
+        member_id: input.member_id,
+        email: input.email,
+        first_name: input.first_name,
+        last_name: input.last_name,
+        joined_at,
+        discord_id: input.discord_id,
+        discord_username: input.discord_username,
+    }
+}
+
+impl From<OperationOutcome> for Outcome {
+    fn from(value: OperationOutcome) -> Self {
+        match value {
+            OperationOutcome::Created(member) => Outcome::Created(MemberCreated {
+                member: Some(member.into()),
+            }),
+            OperationOutcome::Archived(member) => Outcome::Archived(MemberArchived {
+                member: Some(member.into()),
+            }),
+            OperationOutcome::Unchanged(member) => Outcome::Unchanged(MemberUnchanged {
+                member: Some(member.into()),
+            }),
+            OperationOutcome::Updated { before, after } => {
+                let before = before.into();
+                let after = after.into();
+                Outcome::Updated(Box::new(MemberUpdated {
+                    changed_fields: Some(changed_fields(&before, &after)),
+                    before: Some(before),
+                    after: Some(after),
+                }))
+            }
+        }
+    }
+}
+
+pub fn encode_event(value: &OperationOutcome) -> (&'static str, Vec<u8>) {
+    match Outcome::from(value.clone()) {
+        Outcome::Created(event) => ("MemberCreated", event.encode_to_vec()),
+        Outcome::Updated(event) => ("MemberUpdated", event.encode_to_vec()),
+        Outcome::Archived(event) => ("MemberArchived", event.encode_to_vec()),
+        Outcome::Unchanged(event) => ("MemberUnchanged", event.encode_to_vec()),
+        Outcome::Failed(event) => ("MemberOperationFailed", event.encode_to_vec()),
     }
 }
 

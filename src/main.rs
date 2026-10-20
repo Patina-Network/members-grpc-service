@@ -93,7 +93,10 @@ async fn main() -> anyhow::Result<()> {
     });
 
     info!(addr = %grpc_addr, "starting grpc server");
-    let admin_service = MembersAdminService::new(MembersAdminRepository::new(db.clone()));
+    let admin_service = MembersAdminService::new(MembersAdminRepository::new(
+        db.clone(),
+        members_grpc_service::grpc::members_admin::encode_event,
+    ));
     let grpc_server = tokio::spawn(async move {
         Server::builder()
             .layer(grpc_panic_layer)

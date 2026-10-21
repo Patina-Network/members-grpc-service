@@ -8,10 +8,7 @@ use tracing::info;
 
 use members_grpc_service::{
     config::Config,
-    db::{
-        client::connect, health_check::HealthCheckRepository, members::MembersRepository,
-        members_admin::MembersAdminRepository,
-    },
+    db::{client::connect, health_check::HealthCheckRepository, members::MembersRepository},
     grpc::members::{MembersService, MembersServiceServer},
     grpc::members_admin::{MembersAdminService, MembersAdminServiceServer},
     grpc::metrics::GrpcRequestMetricsMiddleware,
@@ -62,9 +59,11 @@ async fn main() -> anyhow::Result<()> {
     grpc_health_reporter
         .set_serving::<MembersServiceServer<MembersService>>()
         .await;
-    grpc_health_reporter
-        .set_serving::<MembersAdminServiceServer<MembersAdminService>>()
-        .await;
+    if config.profile.as_deref() == Some("core_admin") {
+        grpc_health_reporter
+            .set_serving::<MembersAdminServiceServer<MembersAdminService>>()
+            .await;
+    }
     grpc_health_reporter
         .set_service_status("", tonic_health::ServingStatus::Serving)
         .await;
@@ -93,17 +92,16 @@ async fn main() -> anyhow::Result<()> {
     });
 
     info!(addr = %grpc_addr, "starting grpc server");
-    let admin_service = MembersAdminService::new(MembersAdminRepository::new(
-        db.clone(),
-        members_grpc_service::grpc::members_admin::encode_event,
-    ));
+    let admin_service = (config.profile.as_deref() == Some("core_admin")).then(|| {
+        MembersAdminServiceServer::new(MembersAdminService::new(MembersRepository::new(db.clone())))
+    });
     let grpc_server = tokio::spawn(async move {
         Server::builder()
             .layer(grpc_panic_layer)
             .layer(MiddlewareLayer::new(GrpcRequestMetricsMiddleware))
             .add_service(grpc_health_svc)
             .add_service(MembersServiceServer::new(members_service))
-            .add_service(MembersAdminServiceServer::new(admin_service))
+            .add_optional_service(admin_service)
             .add_optional_service(grpc_reflection_svc)
             .add_optional_service(grpc_reflection_svc2)
             .serve(grpc_addr)

@@ -5,6 +5,7 @@ use tracing::info;
 
 #[derive(Clone)]
 pub struct Config {
+    pub profile: Option<String>,
     pub grpc_port: u16,
     pub http_port: u16,
     pub grpc_reflection: bool,
@@ -19,6 +20,7 @@ pub struct Config {
 impl Config {
     pub fn log(&self) {
         info!(
+            profile = self.profile.as_deref().unwrap_or("N/A"),
             grpc_port = self.grpc_port,
             http_port = self.http_port,
             grpc_reflection = self.grpc_reflection,
@@ -37,6 +39,7 @@ impl Config {
 
     fn from_vars(var: impl Fn(&str) -> Option<String>) -> anyhow::Result<Self> {
         Ok(Self {
+            profile: var("PROFILE").filter(|v| !v.is_empty()),
             grpc_reflection: var("GRPC_REFLECTION")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(false),

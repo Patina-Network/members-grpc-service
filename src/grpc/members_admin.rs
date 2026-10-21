@@ -1,10 +1,16 @@
-use prost::Message;
+use chrono::{DateTime, Utc};
+use prost_types::Timestamp;
 use tonic::{Request, Response, Status};
 
-use super::members::{validate_discord_id, validate_email};
+use super::{
+    database_status,
+    members::{validate_discord_id, validate_email},
+};
 
 use crate::{
-    db::members_admin::{CreateMember, MembersAdminRepository, OperationOutcome, UpdateMember},
+    db::members::{
+        CreateMember, MemberIdentifier, MembersRepository, OperationOutcome, UpdateMember,
+    },
     proto::members::admin::{
         ArchiveMemberRequest, ArchiveMemberResponse, BulkMemberOperationsRequest,
         BulkMemberOperationsResponse, CreateMemberRequest, CreateMemberResponse, MemberArchived,
@@ -18,11 +24,11 @@ use crate::{
 pub use members_admin_service_server::MembersAdminServiceServer;
 
 pub struct MembersAdminService {
-    repository: MembersAdminRepository,
+    repository: MembersRepository,
 }
 
 impl MembersAdminService {
-    pub fn new(repository: MembersAdminRepository) -> Self {
+    pub fn new(repository: MembersRepository) -> Self {
         Self { repository }
     }
 
@@ -37,7 +43,7 @@ impl MembersAdminService {
                     .repository
                     .create_member(create_input(input, joined))
                     .await
-                    .map_err(db_error)?;
+                    .map_err(database_status)?;
                 Ok(Outcome::Created(MemberCreated {
                     member: Some(stored.into()),
                 }))
@@ -48,7 +54,7 @@ impl MembersAdminService {
                     .update_operation(update_input(input, joined))
                     .await
                     .map(Into::into)
-                    .map_err(db_error)
+                    .map_err(database_status)
             }
             Operation::Archive(input) => {
                 member_id(input.member_id)?;
@@ -56,31 +62,43 @@ impl MembersAdminService {
                     .archive_operation(input.member_id)
                     .await
                     .map(Into::into)
-                    .map_err(db_error)
+                    .map_err(database_status)
             }
             Operation::Upsert(input) => {
                 let input = input
                     .member
                     .ok_or_else(|| Status::invalid_argument("upsert member is required"))?;
                 let joined = validate_create(&input)?;
-                self.repository
-                    .upsert_member(create_input(input, joined))
+                let existing = self
+                    .repository
+                    .get(MemberIdentifier::Email(input.email.clone()))
                     .await
-                    .map(Into::into)
-                    .map_err(db_error)
+                    .map_err(database_status)?;
+                match existing {
+                    Some(member) => self
+                        .repository
+                        .update_operation(UpdateMember {
+                            member_id: member.id,
+                            email: Some(input.email),
+                            first_name: Some(input.first_name),
+                            last_name: Some(input.last_name),
+                            joined_at: joined,
+                            discord_id: input.discord_id,
+                            discord_username: input.discord_username,
+                        })
+                        .await
+                        .map(Into::into)
+                        .map_err(database_status),
+                    None => self
+                        .repository
+                        .create_member(create_input(input, joined))
+                        .await
+                        .map(|member| OperationOutcome::Created(member).into())
+                        .map_err(database_status),
+                }
             }
         }
     }
-}
-
-fn authorize<T>(request: &Request<T>) -> Result<(), Status> {
-    let mut profiles = request.metadata().get_all("profile").iter();
-    if profiles.next().and_then(|value| value.to_str().ok()) != Some("core_admin")
-        || profiles.next().is_some()
-    {
-        return Err(Status::permission_denied("PROFILE=core_admin is required"));
-    }
-    Ok(())
 }
 
 fn required(value: &str, field: &str) -> Result<(), Status> {
@@ -90,7 +108,7 @@ fn required(value: &str, field: &str) -> Result<(), Status> {
     Ok(())
 }
 
-fn timestamp(value: Option<&prost_types::Timestamp>) -> Result<Option<i64>, Status> {
+fn timestamp(value: Option<&Timestamp>) -> Result<Option<DateTime<Utc>>, Status> {
     value
         .map(|v| {
             if !(-62_135_596_800..=253_402_300_799).contains(&v.seconds)
@@ -98,19 +116,10 @@ fn timestamp(value: Option<&prost_types::Timestamp>) -> Result<Option<i64>, Stat
             {
                 return Err(Status::invalid_argument("joined_at is invalid"));
             }
-            Ok(v.seconds * 1_000_000 + i64::from(v.nanos / 1000))
+            DateTime::from_timestamp(v.seconds, (v.nanos as u32 / 1000) * 1000)
+                .ok_or_else(|| Status::invalid_argument("joined_at is invalid"))
         })
         .transpose()
-}
-
-fn db_error(error: sqlx::Error) -> Status {
-    match &error {
-        sqlx::Error::RowNotFound => Status::not_found("member not found"),
-        sqlx::Error::Database(db) if db.is_unique_violation() => {
-            Status::already_exists("email or discord_id already exists")
-        }
-        _ => crate::grpc::database_status(error),
-    }
 }
 
 fn member_id(value: i32) -> Result<(), Status> {
@@ -122,7 +131,7 @@ fn member_id(value: i32) -> Result<(), Status> {
     Ok(())
 }
 
-fn validate_create(input: &CreateMemberRequest) -> Result<Option<i64>, Status> {
+fn validate_create(input: &CreateMemberRequest) -> Result<Option<DateTime<Utc>>, Status> {
     required(&input.email, "email")?;
     validate_email(&input.email)?;
     if let Some(id) = &input.discord_id {
@@ -133,7 +142,7 @@ fn validate_create(input: &CreateMemberRequest) -> Result<Option<i64>, Status> {
     timestamp(input.joined_at.as_ref())
 }
 
-fn validate_update(input: &UpdateMemberRequest) -> Result<Option<i64>, Status> {
+fn validate_update(input: &UpdateMemberRequest) -> Result<Option<DateTime<Utc>>, Status> {
     member_id(input.member_id)?;
     if let Some(id) = &input.discord_id {
         validate_discord_id(id)?;
@@ -157,14 +166,13 @@ impl members_admin_service_server::MembersAdminService for MembersAdminService {
         &self,
         request: Request<CreateMemberRequest>,
     ) -> Result<Response<CreateMemberResponse>, Status> {
-        authorize(&request)?;
         let input = request.into_inner();
         let joined = validate_create(&input)?;
         let stored = self
             .repository
             .create_member(create_input(input, joined))
             .await
-            .map_err(db_error)?;
+            .map_err(database_status)?;
         Ok(CreateMemberResponse {
             member: Some(stored.into()),
         }
@@ -175,14 +183,13 @@ impl members_admin_service_server::MembersAdminService for MembersAdminService {
         &self,
         request: Request<UpdateMemberRequest>,
     ) -> Result<Response<UpdateMemberResponse>, Status> {
-        authorize(&request)?;
         let input = request.into_inner();
         let joined = validate_update(&input)?;
         let stored = self
             .repository
             .update_member(update_input(input, joined))
             .await
-            .map_err(db_error)?;
+            .map_err(database_status)?;
         Ok(UpdateMemberResponse {
             member: Some(stored.into()),
         }
@@ -193,14 +200,13 @@ impl members_admin_service_server::MembersAdminService for MembersAdminService {
         &self,
         request: Request<ArchiveMemberRequest>,
     ) -> Result<Response<ArchiveMemberResponse>, Status> {
-        authorize(&request)?;
         let input = request.into_inner();
         member_id(input.member_id)?;
         let stored = self
             .repository
             .archive_member(input.member_id)
             .await
-            .map_err(db_error)?;
+            .map_err(database_status)?;
         Ok(ArchiveMemberResponse {
             member: Some(stored.into()),
         }
@@ -211,7 +217,6 @@ impl members_admin_service_server::MembersAdminService for MembersAdminService {
         &self,
         request: Request<BulkMemberOperationsRequest>,
     ) -> Result<Response<BulkMemberOperationsResponse>, Status> {
-        authorize(&request)?;
         let operations = request.into_inner().operations;
         u32::try_from(operations.len())
             .map_err(|_| Status::invalid_argument("too many operations"))?;
@@ -260,7 +265,7 @@ fn changed_fields(
     }
 }
 
-fn create_input(input: CreateMemberRequest, joined_at: Option<i64>) -> CreateMember {
+fn create_input(input: CreateMemberRequest, joined_at: Option<DateTime<Utc>>) -> CreateMember {
     CreateMember {
         email: input.email,
         first_name: input.first_name,
@@ -271,7 +276,7 @@ fn create_input(input: CreateMemberRequest, joined_at: Option<i64>) -> CreateMem
     }
 }
 
-fn update_input(input: UpdateMemberRequest, joined_at: Option<i64>) -> UpdateMember {
+fn update_input(input: UpdateMemberRequest, joined_at: Option<DateTime<Utc>>) -> UpdateMember {
     UpdateMember {
         member_id: input.member_id,
         email: input.email,
@@ -308,15 +313,432 @@ impl From<OperationOutcome> for Outcome {
     }
 }
 
-pub fn encode_event(value: &OperationOutcome) -> (&'static str, Vec<u8>) {
-    match Outcome::from(value.clone()) {
-        Outcome::Created(event) => ("MemberCreated", event.encode_to_vec()),
-        Outcome::Updated(event) => ("MemberUpdated", event.encode_to_vec()),
-        Outcome::Archived(event) => ("MemberArchived", event.encode_to_vec()),
-        Outcome::Unchanged(event) => ("MemberUnchanged", event.encode_to_vec()),
-        Outcome::Failed(event) => ("MemberOperationFailed", event.encode_to_vec()),
+#[cfg(test)]
+mod tests {
+    use sqlx::postgres::PgPoolOptions;
+    use tonic::Code;
+
+    use crate::proto::members::admin::UpsertMemberRequest;
+
+    use super::{members_admin_service_server::MembersAdminService as _, *};
+
+    async fn disconnected_service() -> MembersAdminService {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/unused")
+            .unwrap();
+        pool.close().await;
+        MembersAdminService::new(MembersRepository::new(pool))
+    }
+
+    fn input(email: &str) -> CreateMemberRequest {
+        CreateMemberRequest {
+            email: email.into(),
+            first_name: "First".into(),
+            last_name: "Last".into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn timestamps_validate_protobuf_bounds_and_preserve_database_precision() {
+        for (seconds, nanos) in [
+            (-62_135_596_801, 0),
+            (253_402_300_800, 0),
+            (0, -1),
+            (0, 1_000_000_000),
+        ] {
+            assert!(timestamp(Some(&prost_types::Timestamp { seconds, nanos })).is_err());
+        }
+        for seconds in [-62_135_596_800, -1, 0, 253_402_300_799] {
+            let value = timestamp(Some(&prost_types::Timestamp {
+                seconds,
+                nanos: 123_456_789,
+            }))
+            .unwrap()
+            .unwrap();
+            assert_eq!(value.timestamp(), seconds);
+            assert_eq!(value.timestamp_subsec_nanos(), 123_456_000);
+        }
+    }
+
+    #[tokio::test]
+    async fn validation_precedes_database_access() {
+        let service = disconnected_service().await;
+        for field in 0..3 {
+            let mut value = input("a@example.org");
+            match field {
+                0 => value.email.clear(),
+                1 => value.first_name.clear(),
+                _ => value.last_name = "  ".into(),
+            }
+            assert_eq!(
+                service
+                    .create_member(Request::new(value))
+                    .await
+                    .unwrap_err()
+                    .code(),
+                Code::InvalidArgument
+            );
+        }
+        let mut value = input("a@example.org");
+        value.joined_at = Some(prost_types::Timestamp {
+            seconds: 0,
+            nanos: -1,
+        });
+        assert_eq!(
+            service
+                .create_member(Request::new(value))
+                .await
+                .unwrap_err()
+                .code(),
+            Code::InvalidArgument
+        );
+    }
+
+    fn operation(operation: Operation) -> MemberOperation {
+        MemberOperation {
+            operation: Some(operation),
+        }
+    }
+
+    #[tokio::test]
+    async fn bulk_validation_and_failures() {
+        let service = disconnected_service().await;
+
+        assert!(
+            service
+                .bulk_member_operations(Request::new(BulkMemberOperationsRequest::default()))
+                .await
+                .unwrap()
+                .into_inner()
+                .results
+                .is_empty()
+        );
+
+        let operations = vec![
+            MemberOperation::default(),
+            operation(Operation::Upsert(UpsertMemberRequest::default())),
+            operation(Operation::Create(input(""))),
+            operation(Operation::Update(UpdateMemberRequest {
+                member_id: 1,
+                first_name: Some("  ".into()),
+                ..Default::default()
+            })),
+            operation(Operation::Archive(ArchiveMemberRequest { member_id: 0 })),
+            operation(Operation::Upsert(UpsertMemberRequest {
+                member: Some(CreateMemberRequest {
+                    joined_at: Some(prost_types::Timestamp {
+                        seconds: 0,
+                        nanos: -1,
+                    }),
+                    ..input("valid@example.org")
+                }),
+            })),
+            operation(Operation::Create(input("valid@example.org"))),
+        ];
+        let results = service
+            .bulk_member_operations(Request::new(BulkMemberOperationsRequest { operations }))
+            .await
+            .unwrap()
+            .into_inner()
+            .results;
+        assert_eq!(results.len(), 7);
+        for (index, result) in results.into_iter().enumerate() {
+            assert_eq!(result.index, index as u32);
+            let Some(Outcome::Failed(failure)) = result.outcome else {
+                panic!("expected per-operation failure")
+            };
+            let expected = [
+                "operation is required",
+                "upsert member is required",
+                "email is required",
+                "first_name is required",
+                "member_id must be a positive integer",
+                "joined_at is invalid",
+                "database unavailable",
+            ][index];
+            assert!(failure.error.contains(expected), "{}", failure.error);
+        }
+    }
+
+    #[tokio::test]
+    async fn write_identifiers_follow_lookup_validation() {
+        let service = disconnected_service().await;
+        let discord_error =
+            "discord_id must be a positive unsigned 64-bit integer containing only digits";
+        for (email, discord_id, message) in [
+            ("invalid", None, "email must be a valid email address"),
+            ("member@", None, "email must be a valid email address"),
+            ("a@example.org", Some(""), discord_error),
+            ("a@example.org", Some("abc"), discord_error),
+            ("a@example.org", Some("-1"), discord_error),
+            ("a@example.org", Some("+1"), discord_error),
+            ("a@example.org", Some("1.5"), discord_error),
+            ("a@example.org", Some("0"), discord_error),
+            ("a@example.org", Some("18446744073709551616"), discord_error),
+        ] {
+            let create = CreateMemberRequest {
+                discord_id: discord_id.map(str::to_owned),
+                ..input(email)
+            };
+            let update = UpdateMemberRequest {
+                member_id: 1,
+                email: Some(email.into()),
+                discord_id: create.discord_id.clone(),
+                ..Default::default()
+            };
+            for error in [
+                service
+                    .create_member(Request::new(create.clone()))
+                    .await
+                    .unwrap_err(),
+                service
+                    .update_member(Request::new(update.clone()))
+                    .await
+                    .unwrap_err(),
+            ] {
+                assert_eq!(error.code(), Code::InvalidArgument);
+                assert_eq!(error.message(), message);
+            }
+            let results = service
+                .bulk_member_operations(Request::new(BulkMemberOperationsRequest {
+                    operations: vec![
+                        operation(Operation::Create(create.clone())),
+                        operation(Operation::Update(update)),
+                        operation(Operation::Upsert(UpsertMemberRequest {
+                            member: Some(create),
+                        })),
+                    ],
+                }))
+                .await
+                .unwrap()
+                .into_inner()
+                .results;
+            for result in results {
+                let Some(Outcome::Failed(error)) = result.outcome else {
+                    panic!("expected validation failure");
+                };
+                assert_eq!(error.error, format!("{}: {message}", Code::InvalidArgument));
+            }
+        }
+        for discord_id in [None, Some("1"), Some("18446744073709551615")] {
+            let create = CreateMemberRequest {
+                discord_id: discord_id.map(str::to_owned),
+                ..input("member+tag@example.org")
+            };
+            assert_eq!(
+                service
+                    .create_member(Request::new(create.clone()))
+                    .await
+                    .unwrap_err()
+                    .code(),
+                Code::Unavailable
+            );
+            assert_eq!(
+                service
+                    .update_member(Request::new(UpdateMemberRequest {
+                        member_id: 1,
+                        email: Some(create.email),
+                        discord_id: create.discord_id,
+                        ..Default::default()
+                    }))
+                    .await
+                    .unwrap_err()
+                    .code(),
+                Code::Unavailable
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_update_fields_and_ids() {
+        for field in ["email", "first_name", "last_name"] {
+            let mut input = UpdateMemberRequest {
+                member_id: 1,
+                ..Default::default()
+            };
+            match field {
+                "email" => input.email = Some("  ".into()),
+                "first_name" => input.first_name = Some("  ".into()),
+                _ => input.last_name = Some("  ".into()),
+            }
+            let error = validate_update(&input).unwrap_err();
+            assert_eq!(error.code(), Code::InvalidArgument);
+            assert_eq!(error.message(), format!("{field} is required"));
+        }
+        for id in [0, -1] {
+            assert_eq!(member_id(id).unwrap_err().code(), Code::InvalidArgument);
+        }
+    }
+
+    #[tokio::test]
+    async fn single_and_bulk_writes_preserve_member_state() {
+        let Ok(url) = std::env::var("TEST_DATABASE_URL") else {
+            return;
+        };
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .unwrap();
+        sqlx::query(r#"CREATE TEMP TABLE "Member" (LIKE public."Member" INCLUDING ALL)"#)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let service = MembersAdminService::new(MembersRepository::new(pool.clone()));
+        let created = service
+            .create_member(Request::new(input("one@example.org")))
+            .await
+            .unwrap()
+            .into_inner()
+            .member
+            .unwrap();
+        assert!(created.member_id > 0);
+        assert!(created.joined_at.is_some());
+        assert_eq!(
+            service
+                .create_member(Request::new(input("one@example.org")))
+                .await
+                .unwrap_err()
+                .code(),
+            Code::AlreadyExists
+        );
+
+        let updated = service
+            .update_member(Request::new(UpdateMemberRequest {
+                member_id: created.member_id,
+                first_name: Some("New".into()),
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .member
+            .unwrap();
+        assert_eq!(updated.first_name, "New");
+        assert_eq!(updated.email, created.email);
+        assert_eq!(updated.joined_at, created.joined_at);
+        let archived = service
+            .archive_member(Request::new(ArchiveMemberRequest {
+                member_id: created.member_id,
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .member
+            .unwrap();
+        assert!(archived.archived_at.is_some());
+        assert_eq!(archived.archived_at, archived.updated_at);
+        assert_eq!(
+            service
+                .archive_member(Request::new(ArchiveMemberRequest {
+                    member_id: created.member_id
+                }))
+                .await
+                .unwrap()
+                .into_inner()
+                .member,
+            Some(archived.clone())
+        );
+        for error in [
+            service
+                .update_member(Request::new(UpdateMemberRequest {
+                    member_id: i32::MAX,
+                    ..Default::default()
+                }))
+                .await
+                .unwrap_err(),
+            service
+                .archive_member(Request::new(ArchiveMemberRequest {
+                    member_id: i32::MAX,
+                }))
+                .await
+                .unwrap_err(),
+        ] {
+            assert_eq!(error.code(), Code::NotFound);
+        }
+
+        let member = input("bulk@example.org");
+        let changed = CreateMemberRequest {
+            first_name: "Changed".into(),
+            ..member.clone()
+        };
+        let results = service
+            .bulk_member_operations(Request::new(BulkMemberOperationsRequest {
+                operations: vec![
+                    operation(Operation::Create(member.clone())),
+                    operation(Operation::Create(member)),
+                    operation(Operation::Upsert(UpsertMemberRequest {
+                        member: Some(changed.clone()),
+                    })),
+                    operation(Operation::Upsert(UpsertMemberRequest {
+                        member: Some(changed),
+                    })),
+                    operation(Operation::Upsert(UpsertMemberRequest {
+                        member: Some(input("new@example.org")),
+                    })),
+                ],
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .results;
+        for (index, result) in results.iter().enumerate() {
+            assert_eq!(result.index, index as u32);
+        }
+        assert!(matches!(results[0].outcome, Some(Outcome::Created(_))));
+        assert!(matches!(results[1].outcome, Some(Outcome::Failed(_))));
+        let Some(Outcome::Updated(event)) = &results[2].outcome else {
+            panic!("expected upsert update");
+        };
+        assert_eq!(event.after.as_ref().unwrap().first_name, "Changed");
+        let Some(Outcome::Unchanged(unchanged)) = &results[3].outcome else {
+            panic!("expected unchanged upsert");
+        };
+        assert_eq!(unchanged.member, event.after);
+        assert!(matches!(results[4].outcome, Some(Outcome::Created(_))));
+
+        let bulk_id = event.after.as_ref().unwrap().member_id;
+        assert_eq!(
+            service
+                .update_member(Request::new(UpdateMemberRequest {
+                    member_id: bulk_id,
+                    email: Some("one@example.org".into()),
+                    ..Default::default()
+                }))
+                .await
+                .unwrap_err()
+                .code(),
+            Code::AlreadyExists
+        );
+        let results = service
+            .bulk_member_operations(Request::new(BulkMemberOperationsRequest {
+                operations: vec![
+                    operation(Operation::Archive(ArchiveMemberRequest {
+                        member_id: bulk_id,
+                    })),
+                    operation(Operation::Archive(ArchiveMemberRequest {
+                        member_id: bulk_id,
+                    })),
+                    operation(Operation::Update(UpdateMemberRequest {
+                        member_id: bulk_id,
+                        ..Default::default()
+                    })),
+                ],
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .results;
+        let Some(Outcome::Archived(first)) = &results[0].outcome else {
+            panic!("expected archive");
+        };
+        for result in &results[1..] {
+            let Some(Outcome::Unchanged(value)) = &result.outcome else {
+                panic!("expected unchanged member");
+            };
+            assert_eq!(value.member, first.member);
+        }
+        pool.close().await;
     }
 }
-
-#[cfg(test)]
-mod tests;

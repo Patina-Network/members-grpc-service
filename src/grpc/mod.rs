@@ -12,6 +12,9 @@ pub fn database_status(error: sqlx::Error) -> Status {
         | sqlx::Error::PoolTimedOut
         | sqlx::Error::Io(_)
         | sqlx::Error::Tls(_) => Status::unavailable("database unavailable"),
+        sqlx::Error::Database(ref db) if db.is_unique_violation() => {
+            Status::already_exists("email or discord_id already exists")
+        }
         sqlx::Error::RowNotFound => Status::not_found("record not found"),
         _ => Status::internal("database operation failed"),
     }

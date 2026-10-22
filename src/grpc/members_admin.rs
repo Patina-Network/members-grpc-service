@@ -2,15 +2,13 @@ use chrono::{DateTime, Utc};
 use prost_types::Timestamp;
 use tonic::{Request, Response, Status};
 
-use super::{
-    database_status,
-    members::{validate_discord_id, validate_email},
-};
+use super::database_status;
 
 use crate::{
     db::members::{
         CreateMember, MemberIdentifier, MembersRepository, OperationOutcome, UpdateMember,
     },
+    grpc::{validate_discord_id, validate_email},
     proto::members::admin::{
         ArchiveMemberRequest, ArchiveMemberResponse, BulkMemberOperationsRequest,
         BulkMemberOperationsResponse, CreateMemberRequest, CreateMemberResponse, MemberArchived,
@@ -25,11 +23,15 @@ pub use members_admin_service_server::MembersAdminServiceServer;
 
 pub struct MembersAdminService {
     repository: MembersRepository,
+    max_bulk_operations: usize,
 }
 
 impl MembersAdminService {
-    pub fn new(repository: MembersRepository) -> Self {
-        Self { repository }
+    pub fn new(repository: MembersRepository, max_bulk_operations: usize) -> Self {
+        Self {
+            repository,
+            max_bulk_operations,
+        }
     }
 
     async fn apply_operation(&self, input: MemberOperation) -> Result<Outcome, Status> {
@@ -83,7 +85,7 @@ impl MembersAdminService {
                             first_name: Some(input.first_name),
                             last_name: Some(input.last_name),
                             joined_at: joined,
-                            discord_id: input.discord_id,
+                            discord_id: input.discord_id.map(Some),
                             discord_username: input.discord_username,
                         })
                         .await
@@ -144,7 +146,8 @@ fn validate_create(input: &CreateMemberRequest) -> Result<Option<DateTime<Utc>>,
 
 fn validate_update(input: &UpdateMemberRequest) -> Result<Option<DateTime<Utc>>, Status> {
     member_id(input.member_id)?;
-    if let Some(id) = &input.discord_id {
+    // An explicit "" unlinks Discord; anything else must be a valid ID.
+    if let Some(id) = input.discord_id.as_deref().filter(|id| !id.is_empty()) {
         validate_discord_id(id)?;
     }
     if let Some(value) = &input.email {
@@ -218,20 +221,25 @@ impl members_admin_service_server::MembersAdminService for MembersAdminService {
         request: Request<BulkMemberOperationsRequest>,
     ) -> Result<Response<BulkMemberOperationsResponse>, Status> {
         let operations = request.into_inner().operations;
-        u32::try_from(operations.len())
-            .map_err(|_| Status::invalid_argument("too many operations"))?;
+        if operations.len() > self.max_bulk_operations {
+            return Err(Status::invalid_argument(format!(
+                "too many operations: got {}, maximum is {} per request",
+                operations.len(),
+                self.max_bulk_operations
+            )));
+        }
         let mut results = Vec::with_capacity(operations.len());
-        for (index, operation) in operations.into_iter().enumerate() {
+        for (index, operation) in (0u32..).zip(operations) {
             let outcome = self
                 .apply_operation(operation)
                 .await
                 .unwrap_or_else(|status| {
                     Outcome::Failed(MemberOperationFailed {
-                        error: format!("{}: {}", status.code(), status.message()),
+                        error: format!("{:?}: {}", status.code(), status.message()),
                     })
                 });
             results.push(MemberOperationResult {
-                index: index as u32,
+                index,
                 outcome: Some(outcome),
             });
         }
@@ -283,7 +291,7 @@ fn update_input(input: UpdateMemberRequest, joined_at: Option<DateTime<Utc>>) ->
         first_name: input.first_name,
         last_name: input.last_name,
         joined_at,
-        discord_id: input.discord_id,
+        discord_id: input.discord_id.map(|id| (!id.is_empty()).then_some(id)),
         discord_username: input.discord_username,
     }
 }
@@ -327,7 +335,7 @@ mod tests {
             .connect_lazy("postgres://localhost/unused")
             .unwrap();
         pool.close().await;
-        MembersAdminService::new(MembersRepository::new(pool))
+        MembersAdminService::new(MembersRepository::new(pool), 10_000)
     }
 
     fn input(email: &str) -> CreateMemberRequest {
@@ -415,6 +423,19 @@ mod tests {
                 .is_empty()
         );
 
+        let limited = MembersAdminService::new(service.repository.clone(), 1);
+        let error = limited
+            .bulk_member_operations(Request::new(BulkMemberOperationsRequest {
+                operations: vec![MemberOperation::default(), MemberOperation::default()],
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Code::InvalidArgument);
+        assert_eq!(
+            error.message(),
+            "too many operations: got 2, maximum is 1 per request"
+        );
+
         let operations = vec![
             MemberOperation::default(),
             operation(Operation::Upsert(UpsertMemberRequest::default())),
@@ -469,7 +490,6 @@ mod tests {
         for (email, discord_id, message) in [
             ("invalid", None, "email must be a valid email address"),
             ("member@", None, "email must be a valid email address"),
-            ("a@example.org", Some(""), discord_error),
             ("a@example.org", Some("abc"), discord_error),
             ("a@example.org", Some("-1"), discord_error),
             ("a@example.org", Some("+1"), discord_error),
@@ -518,7 +538,10 @@ mod tests {
                 let Some(Outcome::Failed(error)) = result.outcome else {
                     panic!("expected validation failure");
                 };
-                assert_eq!(error.error, format!("{}: {message}", Code::InvalidArgument));
+                assert_eq!(
+                    error.error,
+                    format!("{:?}: {message}", Code::InvalidArgument)
+                );
             }
         }
         for discord_id in [None, Some("1"), Some("18446744073709551615")] {
@@ -548,6 +571,24 @@ mod tests {
                 Code::Unavailable
             );
         }
+        // "" is not a valid ID on create, but on update it unlinks Discord.
+        let error = service
+            .create_member(Request::new(CreateMemberRequest {
+                discord_id: Some(String::new()),
+                ..input("a@example.org")
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(error.message(), discord_error);
+        let error = service
+            .update_member(Request::new(UpdateMemberRequest {
+                member_id: 1,
+                discord_id: Some(String::new()),
+                ..Default::default()
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Code::Unavailable);
     }
 
     #[test]
@@ -585,7 +626,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        let service = MembersAdminService::new(MembersRepository::new(pool.clone()));
+        let service = MembersAdminService::new(MembersRepository::new(pool.clone()), 10_000);
         let created = service
             .create_member(Request::new(input("one@example.org")))
             .await
@@ -595,14 +636,58 @@ mod tests {
             .unwrap();
         assert!(created.member_id > 0);
         assert!(created.joined_at.is_some());
-        assert_eq!(
-            service
-                .create_member(Request::new(input("one@example.org")))
-                .await
-                .unwrap_err()
-                .code(),
-            Code::AlreadyExists
-        );
+        let error = service
+            .create_member(Request::new(input("one@example.org")))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Code::AlreadyExists);
+        assert_eq!(error.message(), "email already exists");
+
+        let linked = service
+            .update_member(Request::new(UpdateMemberRequest {
+                member_id: created.member_id,
+                discord_id: Some("42".into()),
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .member
+            .unwrap();
+        assert_eq!(linked.discord_id.as_deref(), Some("42"));
+        let error = service
+            .create_member(Request::new(CreateMemberRequest {
+                discord_id: Some("42".into()),
+                ..input("two@example.org")
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Code::AlreadyExists);
+        assert_eq!(error.message(), "discord_id already exists");
+        let kept = service
+            .update_member(Request::new(UpdateMemberRequest {
+                member_id: created.member_id,
+                last_name: Some("Kept".into()),
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .member
+            .unwrap();
+        assert_eq!(kept.discord_id.as_deref(), Some("42"));
+        let unlinked = service
+            .update_member(Request::new(UpdateMemberRequest {
+                member_id: created.member_id,
+                discord_id: Some(String::new()),
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .member
+            .unwrap();
+        assert_eq!(unlinked.discord_id, None);
 
         let updated = service
             .update_member(Request::new(UpdateMemberRequest {

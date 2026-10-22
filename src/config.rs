@@ -5,10 +5,11 @@ use tracing::info;
 
 #[derive(Clone)]
 pub struct Config {
-    pub profile: Option<String>,
+    pub enable_core_admin_service: bool,
     pub grpc_port: u16,
     pub http_port: u16,
     pub grpc_reflection: bool,
+    pub max_bulk_operations: usize,
     pub version: Option<String>,
     pub database_host: String,
     pub database_port: u16,
@@ -20,10 +21,11 @@ pub struct Config {
 impl Config {
     pub fn log(&self) {
         info!(
-            profile = self.profile.as_deref().unwrap_or("N/A"),
+            enable_core_admin_service = self.enable_core_admin_service,
             grpc_port = self.grpc_port,
             http_port = self.http_port,
             grpc_reflection = self.grpc_reflection,
+            max_bulk_operations = self.max_bulk_operations,
             version = self.version.as_deref().unwrap_or("N/A"),
             database_host = self.database_host,
             database_port = self.database_port,
@@ -39,10 +41,15 @@ impl Config {
 
     fn from_vars(var: impl Fn(&str) -> Option<String>) -> anyhow::Result<Self> {
         Ok(Self {
-            profile: var("PROFILE").filter(|v| !v.is_empty()),
+            enable_core_admin_service: var("ENABLE_CORE_ADMIN_SERVICE")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(false),
             grpc_reflection: var("GRPC_REFLECTION")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(false),
+            max_bulk_operations: var("MAX_BULK_OPERATIONS")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(10_000),
             grpc_port: var("GRPC_PORT")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(50051),

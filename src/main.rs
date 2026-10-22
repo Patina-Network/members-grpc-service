@@ -59,25 +59,41 @@ async fn main() -> anyhow::Result<()> {
     grpc_health_reporter
         .set_serving::<MembersServiceServer<MembersService>>()
         .await;
-    if config.profile.as_deref() == Some("core_admin") {
+
+    if config.enable_core_admin_service {
         grpc_health_reporter
             .set_serving::<MembersAdminServiceServer<MembersAdminService>>()
             .await;
     }
+
     grpc_health_reporter
         .set_service_status("", tonic_health::ServingStatus::Serving)
         .await;
+
+    let reflection = |reflection_service: &'static str| {
+        let builder = tonic_reflection::server::Builder::configure()
+            .register_encoded_file_descriptor_set(proto::FILE_DESCRIPTOR_SET)
+            .with_service_name(reflection_service)
+            .with_service_name(proto::members::members_service_server::SERVICE_NAME);
+
+        if config.enable_core_admin_service {
+            builder.with_service_name(
+                proto::members::admin::members_admin_service_server::SERVICE_NAME,
+            )
+        } else {
+            builder
+        }
+    };
+
     let (grpc_reflection_svc, grpc_reflection_svc2) = if config.grpc_reflection {
         (
             Some(
-                tonic_reflection::server::Builder::configure()
-                    .register_encoded_file_descriptor_set(proto::FILE_DESCRIPTOR_SET)
+                reflection(tonic_reflection::pb::v1::server_reflection_server::SERVICE_NAME)
                     .build_v1()
                     .context("failed to build v1 gRPC reflection service")?,
             ),
             Some(
-                tonic_reflection::server::Builder::configure()
-                    .register_encoded_file_descriptor_set(proto::FILE_DESCRIPTOR_SET)
+                reflection(tonic_reflection::pb::v1alpha::server_reflection_server::SERVICE_NAME)
                     .build_v1alpha()
                     .context("failed to build v1alpha gRPC reflection service")?,
             ),
@@ -92,9 +108,13 @@ async fn main() -> anyhow::Result<()> {
     });
 
     info!(addr = %grpc_addr, "starting grpc server");
-    let admin_service = (config.profile.as_deref() == Some("core_admin")).then(|| {
-        MembersAdminServiceServer::new(MembersAdminService::new(MembersRepository::new(db.clone())))
+    let admin_service = config.enable_core_admin_service.then(|| {
+        MembersAdminServiceServer::new(MembersAdminService::new(
+            MembersRepository::new(db.clone()),
+            config.max_bulk_operations,
+        ))
     });
+
     let grpc_server = tokio::spawn(async move {
         Server::builder()
             .layer(grpc_panic_layer)

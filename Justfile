@@ -34,7 +34,7 @@ _seed *args="up":
         migrate -source file://db/seed -database 'pgx5:///?x-migrations-table=seed_migrations' -verbose {{ args }}
 
 dev:
-    dotenvx run -f .env -- bash -c 'GRPC_REFLECTION="${GRPC_REFLECTION:-true}" cargo run --locked'
+    dotenvx run -f .env -- cargo run --locked
 
 test *args:
     cargo test --locked {{ args }}

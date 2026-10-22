@@ -18,6 +18,9 @@ brew install rustup
 # windows users can run this
 winget install -e --id Rustlang.Rustup
 
+# install sqlx-cli with cargo
+cargo install sqlx-cli --no-default-features --features rustls,postgres
+
 cargo build
 cargo run # runs http on :3000, grpc on :50051
 ```
@@ -25,6 +28,14 @@ cargo run # runs http on :3000, grpc on :50051
 ## Manual Testing
 
 `bruno/` holds a [Bruno](https://www.usebruno.com/) collection for calling the service locally and on staging.
+
+## Configuration
+
+- `ENABLE_CORE_ADMIN_SERVICE`: `true` to mount `MembersAdminService`, default `false`.
+- `GRPC_REFLECTION`: `true` to serve gRPC reflection (lists only mounted services), default `false`.
+- `MAX_BULK_OPERATIONS`: maximum operations per `bulkMemberOperations` request, default `10000`.
+
+`example.env` enables reflection and the core admin service for local development.
 
 ## Database development
 

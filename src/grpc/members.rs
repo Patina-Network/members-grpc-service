@@ -4,7 +4,7 @@ use tonic::{Request, Response, Status};
 
 use crate::{
     db::members::{Member as StoredMember, MemberIdentifier, MembersRepository},
-    grpc::{database_status, page::Page},
+    grpc::{database_status, page::Page, timestamp, validate_discord_id, validate_email},
     proto::members::{
         GetMemberRequest, GetMemberResponse, ListMembersRequest, ListMembersResponse, Member,
         get_member_request::Identifier, members_service_server,
@@ -102,38 +102,12 @@ impl From<StoredMember> for Member {
     }
 }
 
-fn timestamp(value: DateTime<Utc>) -> Timestamp {
-    Timestamp {
-        seconds: value.timestamp(),
-        nanos: value.timestamp_subsec_nanos() as i32,
-    }
-}
-
-pub(super) fn validate_email(value: &str) -> Result<(), Status> {
-    if !email_address::EmailAddress::is_valid(value) {
-        return Err(Status::invalid_argument(
-            "email must be a valid email address",
-        ));
-    }
-    Ok(())
-}
-
-pub(super) fn validate_discord_id(value: &str) -> Result<(), Status> {
-    if value.is_empty()
-        || !value.bytes().all(|byte| byte.is_ascii_digit())
-        || !value.parse::<u64>().is_ok_and(|v| v > 0)
-    {
-        return Err(Status::invalid_argument(
-            "discord_id must be a positive unsigned 64-bit integer containing only digits",
-        ));
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use sqlx::postgres::PgPoolOptions;
     use tonic::Code;
+
+    use crate::grpc::timestamp;
 
     use super::{members_service_server::MembersService as _, *};
 

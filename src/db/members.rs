@@ -35,7 +35,8 @@ pub struct UpdateMember {
     pub first_name: Option<String>,
     pub last_name: Option<String>,
     pub joined_at: Option<DateTime<Utc>>,
-    pub discord_id: Option<String>,
+    /// `None` = dont change, `Some(None)` unlinks it
+    pub discord_id: Option<Option<String>>,
     pub discord_username: Option<String>,
 }
 
@@ -172,13 +173,14 @@ impl MembersRepository {
     }
 
     pub async fn create_member(&self, input: CreateMember) -> Result<Member, sqlx::Error> {
+        let now = Utc::now();
         sqlx::query_as!(
             Member,
             r#"
             INSERT INTO "Member"
                 (email, "firstName", "lastName", "joinedAt", "discordId", "discordUsername", "updatedAt")
             VALUES
-                ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+                ($1, $2, $3, $4, $5, $6, $7)
             RETURNING
                 id,
                 email,
@@ -193,9 +195,10 @@ impl MembersRepository {
             input.email,
             input.first_name,
             input.last_name,
-            input.joined_at.unwrap_or_else(Utc::now),
+            input.joined_at.unwrap_or(now),
             input.discord_id,
-            input.discord_username
+            input.discord_username,
+            now
         )
         .fetch_one(&self.pool)
         .await
@@ -261,7 +264,7 @@ impl MembersRepository {
             && input
                 .discord_id
                 .as_ref()
-                .is_none_or(|v| Some(v) == before.discord_id.as_ref())
+                .is_none_or(|v| *v == before.discord_id)
             && input
                 .discord_username
                 .as_ref()
@@ -285,7 +288,7 @@ impl MembersRepository {
                 "joinedAt" = $5,
                 "discordId" = $6,
                 "discordUsername" = $7,
-                "updatedAt" = clock_timestamp()
+                "updatedAt" = $8
             WHERE
                 id = $1
             RETURNING
@@ -306,10 +309,13 @@ impl MembersRepository {
                 .unwrap_or_else(|| before.first_name.clone()),
             input.last_name.unwrap_or_else(|| before.last_name.clone()),
             input.joined_at.unwrap_or(before.joined_at),
-            input.discord_id.or_else(|| before.discord_id.clone()),
+            input
+                .discord_id
+                .unwrap_or_else(|| before.discord_id.clone()),
             input
                 .discord_username
-                .or_else(|| before.discord_username.clone())
+                .or_else(|| before.discord_username.clone()),
+            Utc::now()
         )
         .fetch_one(&mut **tx)
         .await?;
@@ -334,15 +340,14 @@ impl MembersRepository {
     }
 
     async fn archive(&self, member_id: i32) -> Result<(Member, bool), sqlx::Error> {
-        let mut tx = self.pool.begin().await?;
         let updated = sqlx::query_as!(
             Member,
             r#"
             UPDATE
                 "Member"
             SET
-                "archivedAt" = statement_timestamp(),
-                "updatedAt" = statement_timestamp()
+                "archivedAt" = $2,
+                "updatedAt" = $2
             WHERE
                 id = $1
                 AND "archivedAt" IS NULL
@@ -357,10 +362,12 @@ impl MembersRepository {
                 "updatedAt" AS updated_at,
                 "archivedAt" AS archived_at
             "#,
-            member_id
+            member_id,
+            Utc::now()
         )
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&self.pool)
         .await?;
+
         let Some(stored) = updated else {
             let existing = sqlx::query_as!(
                 Member,
@@ -382,12 +389,11 @@ impl MembersRepository {
                 "#,
                 member_id
             )
-            .fetch_one(&mut *tx)
+            .fetch_one(&self.pool)
             .await?;
-            tx.commit().await?;
             return Ok((existing, false));
         };
-        tx.commit().await?;
+
         Ok((stored, true))
     }
 }

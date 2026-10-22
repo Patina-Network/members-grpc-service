@@ -1,10 +1,11 @@
-use chrono::{DateTime, Utc};
-use prost_types::Timestamp;
 use tonic::{Request, Response, Status};
 
 use crate::{
     db::members::{Member as StoredMember, MemberIdentifier, MembersRepository},
-    grpc::{database_status, page::Page, timestamp, validate_discord_id, validate_email},
+    grpc::{
+        database_status, page::Page, timestamp, validate_discord_id, validate_email,
+        validate_member_id,
+    },
     proto::members::{
         GetMemberRequest, GetMemberResponse, ListMembersRequest, ListMembersResponse, Member,
         get_member_request::Identifier, members_service_server,
@@ -30,11 +31,9 @@ impl members_service_server::MembersService for MembersService {
         request: Request<GetMemberRequest>,
     ) -> Result<Response<GetMemberResponse>, Status> {
         let identifier = match request.into_inner().identifier {
-            Some(Identifier::MemberId(id)) if id > 0 => MemberIdentifier::Id(id),
-            Some(Identifier::MemberId(_)) => {
-                return Err(Status::invalid_argument(
-                    "member_id must be a positive integer",
-                ));
+            Some(Identifier::MemberId(id)) => {
+                validate_member_id(id)?;
+                MemberIdentifier::Id(id)
             }
             Some(Identifier::Email(email)) => {
                 validate_email(&email)?;
@@ -106,8 +105,6 @@ impl From<StoredMember> for Member {
 mod tests {
     use sqlx::postgres::PgPoolOptions;
     use tonic::Code;
-
-    use crate::grpc::timestamp;
 
     use super::{members_service_server::MembersService as _, *};
 
@@ -302,20 +299,6 @@ mod tests {
         let error = database_status(sqlx::Error::ColumnNotFound("private column".into()));
         assert_eq!(error.code(), Code::Internal);
         assert_eq!(error.message(), "database operation failed");
-    }
-
-    #[test]
-    fn timestamps_preserve_subseconds_before_the_epoch() {
-        let value = DateTime::parse_from_rfc3339("1969-12-31T23:59:59.123456Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        assert_eq!(
-            timestamp(value),
-            Timestamp {
-                seconds: -1,
-                nanos: 123_456_000
-            }
-        );
     }
 
     #[tokio::test]

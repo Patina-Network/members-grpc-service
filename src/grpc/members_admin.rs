@@ -2,13 +2,13 @@ use chrono::{DateTime, Utc};
 use prost_types::Timestamp;
 use tonic::{Request, Response, Status};
 
-use super::database_status;
-
 use crate::{
     db::members::{
         CreateMember, MemberIdentifier, MembersRepository, OperationOutcome, UpdateMember,
     },
-    grpc::{validate_discord_id, validate_email},
+    grpc::{
+        database_status, parse_timestamp, validate_discord_id, validate_email, validate_member_id,
+    },
     proto::members::admin::{
         ArchiveMemberRequest, ArchiveMemberResponse, BulkMemberOperationsRequest,
         BulkMemberOperationsResponse, CreateMemberRequest, CreateMemberResponse, MemberArchived,
@@ -39,27 +39,20 @@ impl MembersAdminService {
             .operation
             .ok_or_else(|| Status::invalid_argument("operation is required"))?
         {
-            Operation::Create(input) => {
-                let joined = validate_create(&input)?;
-                let stored = self
-                    .repository
-                    .create_member(create_input(input, joined))
-                    .await
-                    .map_err(database_status)?;
-                Ok(Outcome::Created(MemberCreated {
-                    member: Some(stored.into()),
-                }))
-            }
-            Operation::Update(input) => {
-                let joined = validate_update(&input)?;
-                self.repository
-                    .update_operation(update_input(input, joined))
-                    .await
-                    .map(Into::into)
-                    .map_err(database_status)
-            }
+            Operation::Create(input) => self
+                .repository
+                .create_member(input.try_into()?)
+                .await
+                .map(|member| OperationOutcome::Created(member).into())
+                .map_err(database_status),
+            Operation::Update(input) => self
+                .repository
+                .update_operation(input.try_into()?)
+                .await
+                .map(Into::into)
+                .map_err(database_status),
             Operation::Archive(input) => {
-                member_id(input.member_id)?;
+                validate_member_id(input.member_id)?;
                 self.repository
                     .archive_operation(input.member_id)
                     .await
@@ -67,37 +60,37 @@ impl MembersAdminService {
                     .map_err(database_status)
             }
             Operation::Upsert(input) => {
-                let input = input
-                    .member
-                    .ok_or_else(|| Status::invalid_argument("upsert member is required"))?;
-                let joined = validate_create(&input)?;
+                let member = CreateMember::try_from(
+                    input
+                        .member
+                        .ok_or_else(|| Status::invalid_argument("upsert member is required"))?,
+                )?;
                 let existing = self
                     .repository
-                    .get(MemberIdentifier::Email(input.email.clone()))
+                    .get(MemberIdentifier::Email(member.email.clone()))
                     .await
                     .map_err(database_status)?;
-                match existing {
-                    Some(member) => self
-                        .repository
-                        .update_operation(UpdateMember {
-                            member_id: member.id,
-                            email: Some(input.email),
-                            first_name: Some(input.first_name),
-                            last_name: Some(input.last_name),
-                            joined_at: joined,
-                            discord_id: input.discord_id.map(Some),
-                            discord_username: input.discord_username,
-                        })
-                        .await
-                        .map(Into::into)
-                        .map_err(database_status),
+                let outcome = match existing {
+                    Some(existing) => {
+                        self.repository
+                            .update_operation(UpdateMember {
+                                member_id: existing.id,
+                                email: Some(member.email),
+                                first_name: Some(member.first_name),
+                                last_name: Some(member.last_name),
+                                joined_at: member.joined_at,
+                                discord_id: member.discord_id.map(Some),
+                                discord_username: member.discord_username,
+                            })
+                            .await
+                    }
                     None => self
                         .repository
-                        .create_member(create_input(input, joined))
+                        .create_member(member)
                         .await
-                        .map(|member| OperationOutcome::Created(member).into())
-                        .map_err(database_status),
-                }
+                        .map(OperationOutcome::Created),
+                };
+                outcome.map(Into::into).map_err(database_status)
             }
         }
     }
@@ -110,57 +103,71 @@ fn required(value: &str, field: &str) -> Result<(), Status> {
     Ok(())
 }
 
-fn timestamp(value: Option<&Timestamp>) -> Result<Option<DateTime<Utc>>, Status> {
+fn parse_joined_at(value: Option<Timestamp>) -> Result<Option<DateTime<Utc>>, Status> {
     value
-        .map(|v| {
-            if !(-62_135_596_800..=253_402_300_799).contains(&v.seconds)
-                || !(0..1_000_000_000).contains(&v.nanos)
-            {
-                return Err(Status::invalid_argument("joined_at is invalid"));
+        .map(|value| {
+            let joined_at = parse_timestamp(value, "joined_at")?;
+            if joined_at > Utc::now() {
+                return Err(Status::invalid_argument(
+                    "joined_at must not be in the future",
+                ));
             }
-            DateTime::from_timestamp(v.seconds, (v.nanos as u32 / 1000) * 1000)
-                .ok_or_else(|| Status::invalid_argument("joined_at is invalid"))
+            Ok(joined_at)
         })
         .transpose()
 }
 
-fn member_id(value: i32) -> Result<(), Status> {
-    if value <= 0 {
-        return Err(Status::invalid_argument(
-            "member_id must be a positive integer",
-        ));
+impl TryFrom<CreateMemberRequest> for CreateMember {
+    type Error = Status;
+
+    fn try_from(input: CreateMemberRequest) -> Result<Self, Status> {
+        required(&input.email, "email")?;
+        validate_email(&input.email)?;
+        if let Some(id) = &input.discord_id {
+            validate_discord_id(id)?;
+        }
+        required(&input.first_name, "first_name")?;
+        required(&input.last_name, "last_name")?;
+        Ok(Self {
+            joined_at: parse_joined_at(input.joined_at)?,
+            email: input.email,
+            first_name: input.first_name,
+            last_name: input.last_name,
+            discord_id: input.discord_id,
+            discord_username: input.discord_username,
+        })
     }
-    Ok(())
 }
 
-fn validate_create(input: &CreateMemberRequest) -> Result<Option<DateTime<Utc>>, Status> {
-    required(&input.email, "email")?;
-    validate_email(&input.email)?;
-    if let Some(id) = &input.discord_id {
-        validate_discord_id(id)?;
-    }
-    required(&input.first_name, "first_name")?;
-    required(&input.last_name, "last_name")?;
-    timestamp(input.joined_at.as_ref())
-}
+impl TryFrom<UpdateMemberRequest> for UpdateMember {
+    type Error = Status;
 
-fn validate_update(input: &UpdateMemberRequest) -> Result<Option<DateTime<Utc>>, Status> {
-    member_id(input.member_id)?;
-    // An explicit "" unlinks Discord; anything else must be a valid ID.
-    if let Some(id) = input.discord_id.as_deref().filter(|id| !id.is_empty()) {
-        validate_discord_id(id)?;
+    fn try_from(input: UpdateMemberRequest) -> Result<Self, Status> {
+        validate_member_id(input.member_id)?;
+        // An explicit "" unlinks Discord; anything else must be a valid ID.
+        if let Some(id) = input.discord_id.as_deref().filter(|id| !id.is_empty()) {
+            validate_discord_id(id)?;
+        }
+        if let Some(value) = &input.email {
+            required(value, "email")?;
+            validate_email(value)?;
+        }
+        if let Some(value) = &input.first_name {
+            required(value, "first_name")?;
+        }
+        if let Some(value) = &input.last_name {
+            required(value, "last_name")?;
+        }
+        Ok(Self {
+            member_id: input.member_id,
+            joined_at: parse_joined_at(input.joined_at)?,
+            email: input.email,
+            first_name: input.first_name,
+            last_name: input.last_name,
+            discord_id: input.discord_id.map(|id| (!id.is_empty()).then_some(id)),
+            discord_username: input.discord_username,
+        })
     }
-    if let Some(value) = &input.email {
-        required(value, "email")?;
-        validate_email(value)?;
-    }
-    if let Some(value) = &input.first_name {
-        required(value, "first_name")?;
-    }
-    if let Some(value) = &input.last_name {
-        required(value, "last_name")?;
-    }
-    timestamp(input.joined_at.as_ref())
 }
 
 #[tonic::async_trait]
@@ -169,11 +176,9 @@ impl members_admin_service_server::MembersAdminService for MembersAdminService {
         &self,
         request: Request<CreateMemberRequest>,
     ) -> Result<Response<CreateMemberResponse>, Status> {
-        let input = request.into_inner();
-        let joined = validate_create(&input)?;
         let stored = self
             .repository
-            .create_member(create_input(input, joined))
+            .create_member(request.into_inner().try_into()?)
             .await
             .map_err(database_status)?;
         Ok(CreateMemberResponse {
@@ -186,11 +191,9 @@ impl members_admin_service_server::MembersAdminService for MembersAdminService {
         &self,
         request: Request<UpdateMemberRequest>,
     ) -> Result<Response<UpdateMemberResponse>, Status> {
-        let input = request.into_inner();
-        let joined = validate_update(&input)?;
         let stored = self
             .repository
-            .update_member(update_input(input, joined))
+            .update_member(request.into_inner().try_into()?)
             .await
             .map_err(database_status)?;
         Ok(UpdateMemberResponse {
@@ -204,7 +207,7 @@ impl members_admin_service_server::MembersAdminService for MembersAdminService {
         request: Request<ArchiveMemberRequest>,
     ) -> Result<Response<ArchiveMemberResponse>, Status> {
         let input = request.into_inner();
-        member_id(input.member_id)?;
+        validate_member_id(input.member_id)?;
         let stored = self
             .repository
             .archive_member(input.member_id)
@@ -273,29 +276,6 @@ fn changed_fields(
     }
 }
 
-fn create_input(input: CreateMemberRequest, joined_at: Option<DateTime<Utc>>) -> CreateMember {
-    CreateMember {
-        email: input.email,
-        first_name: input.first_name,
-        last_name: input.last_name,
-        joined_at,
-        discord_id: input.discord_id,
-        discord_username: input.discord_username,
-    }
-}
-
-fn update_input(input: UpdateMemberRequest, joined_at: Option<DateTime<Utc>>) -> UpdateMember {
-    UpdateMember {
-        member_id: input.member_id,
-        email: input.email,
-        first_name: input.first_name,
-        last_name: input.last_name,
-        joined_at,
-        discord_id: input.discord_id.map(|id| (!id.is_empty()).then_some(id)),
-        discord_username: input.discord_username,
-    }
-}
-
 impl From<OperationOutcome> for Outcome {
     fn from(value: OperationOutcome) -> Self {
         match value {
@@ -326,7 +306,7 @@ mod tests {
     use sqlx::postgres::PgPoolOptions;
     use tonic::Code;
 
-    use crate::proto::members::admin::UpsertMemberRequest;
+    use crate::{grpc::timestamp, proto::members::admin::UpsertMemberRequest};
 
     use super::{members_admin_service_server::MembersAdminService as _, *};
 
@@ -344,28 +324,6 @@ mod tests {
             first_name: "First".into(),
             last_name: "Last".into(),
             ..Default::default()
-        }
-    }
-
-    #[test]
-    fn timestamps_validate_protobuf_bounds_and_preserve_database_precision() {
-        for (seconds, nanos) in [
-            (-62_135_596_801, 0),
-            (253_402_300_800, 0),
-            (0, -1),
-            (0, 1_000_000_000),
-        ] {
-            assert!(timestamp(Some(&prost_types::Timestamp { seconds, nanos })).is_err());
-        }
-        for seconds in [-62_135_596_800, -1, 0, 253_402_300_799] {
-            let value = timestamp(Some(&prost_types::Timestamp {
-                seconds,
-                nanos: 123_456_789,
-            }))
-            .unwrap()
-            .unwrap();
-            assert_eq!(value.timestamp(), seconds);
-            assert_eq!(value.timestamp_subsec_nanos(), 123_456_000);
         }
     }
 
@@ -388,19 +346,29 @@ mod tests {
                 Code::InvalidArgument
             );
         }
-        let mut value = input("a@example.org");
-        value.joined_at = Some(prost_types::Timestamp {
-            seconds: 0,
-            nanos: -1,
-        });
-        assert_eq!(
-            service
-                .create_member(Request::new(value))
+        for (joined_at, message) in [
+            (
+                prost_types::Timestamp {
+                    seconds: 0,
+                    nanos: -1,
+                },
+                "joined_at is invalid",
+            ),
+            (
+                timestamp(Utc::now() + chrono::Duration::days(1)),
+                "joined_at must not be in the future",
+            ),
+        ] {
+            let error = service
+                .create_member(Request::new(CreateMemberRequest {
+                    joined_at: Some(joined_at),
+                    ..input("a@example.org")
+                }))
                 .await
-                .unwrap_err()
-                .code(),
-            Code::InvalidArgument
-        );
+                .unwrap_err();
+            assert_eq!(error.code(), Code::InvalidArgument);
+            assert_eq!(error.message(), message);
+        }
     }
 
     fn operation(operation: Operation) -> MemberOperation {
@@ -592,7 +560,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_invalid_update_fields_and_ids() {
+    fn rejects_blank_update_fields() {
         for field in ["email", "first_name", "last_name"] {
             let mut input = UpdateMemberRequest {
                 member_id: 1,
@@ -603,12 +571,11 @@ mod tests {
                 "first_name" => input.first_name = Some("  ".into()),
                 _ => input.last_name = Some("  ".into()),
             }
-            let error = validate_update(&input).unwrap_err();
+            let Err(error) = UpdateMember::try_from(input) else {
+                panic!("expected blank {field} to be rejected");
+            };
             assert_eq!(error.code(), Code::InvalidArgument);
             assert_eq!(error.message(), format!("{field} is required"));
-        }
-        for id in [0, -1] {
-            assert_eq!(member_id(id).unwrap_err().code(), Code::InvalidArgument);
         }
     }
 

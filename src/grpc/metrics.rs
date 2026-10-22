@@ -171,6 +171,7 @@ impl http_body::Body for ObservedGrpcBody {
                     tonic::Code::DataLoss => "DATA_LOSS",
                     tonic::Code::Unauthenticated => "UNAUTHENTICATED",
                 };
+
                 this.recorder.record(code);
 
                 Poll::Ready(Some(Err(status)))

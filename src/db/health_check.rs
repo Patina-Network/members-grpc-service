@@ -21,6 +21,7 @@ impl HealthCheckRepository {
         .await
         .context("database health check timed out")?
         .context("database health check failed")?;
+
         Ok(())
     }
 }

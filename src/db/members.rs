@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Member {
     pub id: i32,
     pub email: String,
@@ -174,6 +174,7 @@ impl MembersRepository {
 
     pub async fn create_member(&self, input: CreateMember) -> Result<Member, sqlx::Error> {
         let now = Utc::now();
+
         sqlx::query_as!(
             Member,
             r#"
@@ -208,6 +209,7 @@ impl MembersRepository {
         let mut tx = self.pool.begin().await?;
         let result = self.update_in_transaction(&mut tx, input, false).await?;
         tx.commit().await?;
+
         Ok(result.after)
     }
 
@@ -218,6 +220,7 @@ impl MembersRepository {
         let mut tx = self.pool.begin().await?;
         let result = self.update_in_transaction(&mut tx, input, true).await?;
         tx.commit().await?;
+
         Ok(result.into_outcome())
     }
 
@@ -250,32 +253,35 @@ impl MembersRepository {
         )
         .fetch_one(&mut **tx)
         .await?;
-        if skip_unchanged
-            && input.email.as_ref().is_none_or(|v| *v == before.email)
-            && input
-                .first_name
-                .as_ref()
-                .is_none_or(|v| *v == before.first_name)
-            && input
-                .last_name
-                .as_ref()
-                .is_none_or(|v| *v == before.last_name)
-            && input.joined_at.is_none_or(|v| v == before.joined_at)
-            && input
-                .discord_id
-                .as_ref()
-                .is_none_or(|v| *v == before.discord_id)
-            && input
-                .discord_username
-                .as_ref()
-                .is_none_or(|v| Some(v) == before.discord_username.as_ref())
-        {
+
+        let mut after = before.clone();
+        if let Some(email) = input.email {
+            after.email = email;
+        }
+        if let Some(first_name) = input.first_name {
+            after.first_name = first_name;
+        }
+        if let Some(last_name) = input.last_name {
+            after.last_name = last_name;
+        }
+        if let Some(joined_at) = input.joined_at {
+            after.joined_at = joined_at;
+        }
+        if let Some(discord_id) = input.discord_id {
+            after.discord_id = discord_id;
+        }
+        if let Some(discord_username) = input.discord_username {
+            after.discord_username = Some(discord_username);
+        }
+
+        if skip_unchanged && after == before {
             return Ok(UpdateResult {
-                before: before.clone(),
-                after: before,
+                before,
+                after,
                 changed: false,
             });
         }
+
         let after = sqlx::query_as!(
             Member,
             r#"
@@ -303,22 +309,17 @@ impl MembersRepository {
                 "archivedAt" AS archived_at
             "#,
             input.member_id,
-            input.email.unwrap_or_else(|| before.email.clone()),
-            input
-                .first_name
-                .unwrap_or_else(|| before.first_name.clone()),
-            input.last_name.unwrap_or_else(|| before.last_name.clone()),
-            input.joined_at.unwrap_or(before.joined_at),
-            input
-                .discord_id
-                .unwrap_or_else(|| before.discord_id.clone()),
-            input
-                .discord_username
-                .or_else(|| before.discord_username.clone()),
+            after.email,
+            after.first_name,
+            after.last_name,
+            after.joined_at,
+            after.discord_id,
+            after.discord_username,
             Utc::now()
         )
         .fetch_one(&mut **tx)
         .await?;
+
         Ok(UpdateResult {
             before,
             after,
@@ -391,6 +392,7 @@ impl MembersRepository {
             )
             .fetch_one(&self.pool)
             .await?;
+
             return Ok((existing, false));
         };
 

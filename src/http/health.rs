@@ -7,6 +7,7 @@ pub async fn ready(State(state): State<AppState>) -> Result<&'static str, Status
         tracing::warn!(%err, "database health check failed");
         StatusCode::SERVICE_UNAVAILABLE
     })?;
+
     Ok("ok")
 }
 

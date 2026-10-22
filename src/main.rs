@@ -49,6 +49,7 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Config::from_env()?;
     config.log();
+
     let db = connect(&config).await?;
     let members_service = MembersService::new(MembersRepository::new(db.clone()));
 
@@ -138,6 +139,7 @@ async fn main() -> anyhow::Result<()> {
     let http_listener = TcpListener::bind(&http_addr)
         .await
         .context("failed to bind to http address")?;
+
     info!(addr = %http_addr, "starting http server");
     let http_server =
         tokio::spawn(async move { axum::serve(http_listener, router(http_app_state)).await });

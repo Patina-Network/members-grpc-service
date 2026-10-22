@@ -47,6 +47,7 @@ impl members_service_server::MembersService for MembersService {
                 return Err(Status::invalid_argument("a member identifier is required"));
             }
         };
+
         let member = self
             .repository
             .get(identifier)
@@ -70,11 +71,13 @@ impl members_service_server::MembersService for MembersService {
             &request.page_token,
             if request.include_archived { "1" } else { "0" },
         )?;
+
         let members = self
             .repository
             .list(request.include_archived, page.after(), page.fetch_limit())
             .await
             .map_err(database_status)?;
+
         let (members, next_page_token) = page.finish(members, |member| member.id);
 
         Ok(ListMembersResponse {
@@ -121,15 +124,18 @@ mod tests {
         let Ok(url) = std::env::var("TEST_DATABASE_URL") else {
             return;
         };
+
         let pool = PgPoolOptions::new()
             .max_connections(1)
             .connect(&url)
             .await
             .unwrap();
+
         sqlx::query(r#"CREATE TEMP TABLE "Member" (LIKE public."Member" INCLUDING ALL)"#)
             .execute(&pool)
             .await
             .unwrap();
+
         sqlx::query(
             r#"
             INSERT INTO "Member"
@@ -144,7 +150,9 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+
         let service = MembersService::new(MembersRepository::new(pool.clone()));
+
         for identifier in [
             Identifier::MemberId(10),
             Identifier::Email("test10@example.com".into()),
@@ -161,9 +169,11 @@ mod tests {
                 .unwrap();
             assert_eq!(member.member_id, 10);
         }
+
         for include_archived in [false, true] {
             let mut token = String::new();
             let mut ids = Vec::new();
+
             loop {
                 let response = service
                     .list_members(Request::new(ListMembersRequest {
@@ -176,16 +186,20 @@ mod tests {
                     .into_inner();
                 ids.extend(response.members.iter().map(|member| member.member_id));
                 token = response.next_page_token;
+
                 if token.is_empty() {
                     break;
                 }
+
                 assert!(ids.len() < 12);
             }
+
             assert_eq!(
                 ids,
                 (1..=if include_archived { 12 } else { 11 }).collect::<Vec<_>>()
             );
         }
+
         let error = service
             .get_member(Request::new(GetMemberRequest {
                 identifier: Some(Identifier::MemberId(100)),
@@ -193,12 +207,14 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.code(), Code::NotFound);
+
         pool.close().await;
     }
 
     #[tokio::test]
     async fn rejects_invalid_requests_before_querying() {
         let service = disconnected_service().await;
+
         for identifier in [
             None,
             Some(Identifier::MemberId(0)),
@@ -220,6 +236,7 @@ mod tests {
                 .unwrap_err();
             assert_eq!(error.code(), Code::InvalidArgument);
         }
+
         for request in [
             ListMembersRequest {
                 page_size: -1,
@@ -254,6 +271,7 @@ mod tests {
     #[tokio::test]
     async fn invalid_identifiers_report_the_field_and_reason() {
         let service = disconnected_service().await;
+
         for (identifier, message) in [
             (None, "a member identifier is required"),
             (
@@ -281,6 +299,7 @@ mod tests {
     #[tokio::test]
     async fn database_errors_return_sanitized_statuses() {
         let service = disconnected_service().await;
+
         let error = service
             .get_member(Request::new(GetMemberRequest {
                 identifier: Some(Identifier::MemberId(1)),
@@ -304,6 +323,7 @@ mod tests {
     #[tokio::test]
     async fn valid_identifiers_reach_the_repository() {
         let service = disconnected_service().await;
+
         for identifier in [
             Identifier::MemberId(1),
             Identifier::Email("member+tag@example.com".into()),

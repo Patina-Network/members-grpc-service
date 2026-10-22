@@ -65,12 +65,14 @@ impl MembersAdminService {
                         .member
                         .ok_or_else(|| Status::invalid_argument("upsert member is required"))?,
                 )?;
-                let existing = self
+
+                let existing_member = self
                     .repository
                     .get(MemberIdentifier::Email(member.email.clone()))
                     .await
                     .map_err(database_status)?;
-                let outcome = match existing {
+
+                let outcome = match existing_member {
                     Some(existing) => {
                         self.repository
                             .update_operation(UpdateMember {
@@ -90,6 +92,7 @@ impl MembersAdminService {
                         .await
                         .map(OperationOutcome::Created),
                 };
+
                 outcome.map(Into::into).map_err(database_status)
             }
         }
@@ -107,11 +110,13 @@ fn parse_joined_at(value: Option<Timestamp>) -> Result<Option<DateTime<Utc>>, St
     value
         .map(|value| {
             let joined_at = parse_timestamp(value, "joined_at")?;
+
             if joined_at > Utc::now() {
                 return Err(Status::invalid_argument(
                     "joined_at must not be in the future",
                 ));
             }
+
             Ok(joined_at)
         })
         .transpose()
@@ -123,11 +128,14 @@ impl TryFrom<CreateMemberRequest> for CreateMember {
     fn try_from(input: CreateMemberRequest) -> Result<Self, Status> {
         required(&input.email, "email")?;
         validate_email(&input.email)?;
+
         if let Some(id) = &input.discord_id {
             validate_discord_id(id)?;
         }
+
         required(&input.first_name, "first_name")?;
         required(&input.last_name, "last_name")?;
+
         Ok(Self {
             joined_at: parse_joined_at(input.joined_at)?,
             email: input.email,
@@ -144,20 +152,24 @@ impl TryFrom<UpdateMemberRequest> for UpdateMember {
 
     fn try_from(input: UpdateMemberRequest) -> Result<Self, Status> {
         validate_member_id(input.member_id)?;
+
         // An explicit "" unlinks Discord; anything else must be a valid ID.
         if let Some(id) = input.discord_id.as_deref().filter(|id| !id.is_empty()) {
             validate_discord_id(id)?;
         }
+
         if let Some(value) = &input.email {
             required(value, "email")?;
             validate_email(value)?;
         }
+
         if let Some(value) = &input.first_name {
             required(value, "first_name")?;
         }
         if let Some(value) = &input.last_name {
             required(value, "last_name")?;
         }
+
         Ok(Self {
             member_id: input.member_id,
             joined_at: parse_joined_at(input.joined_at)?,
@@ -176,13 +188,14 @@ impl members_admin_service_server::MembersAdminService for MembersAdminService {
         &self,
         request: Request<CreateMemberRequest>,
     ) -> Result<Response<CreateMemberResponse>, Status> {
-        let stored = self
+        let created_member = self
             .repository
             .create_member(request.into_inner().try_into()?)
             .await
             .map_err(database_status)?;
+
         Ok(CreateMemberResponse {
-            member: Some(stored.into()),
+            member: Some(created_member.into()),
         }
         .into())
     }
@@ -191,13 +204,14 @@ impl members_admin_service_server::MembersAdminService for MembersAdminService {
         &self,
         request: Request<UpdateMemberRequest>,
     ) -> Result<Response<UpdateMemberResponse>, Status> {
-        let stored = self
+        let updated_member = self
             .repository
             .update_member(request.into_inner().try_into()?)
             .await
             .map_err(database_status)?;
+
         Ok(UpdateMemberResponse {
-            member: Some(stored.into()),
+            member: Some(updated_member.into()),
         }
         .into())
     }
@@ -208,13 +222,15 @@ impl members_admin_service_server::MembersAdminService for MembersAdminService {
     ) -> Result<Response<ArchiveMemberResponse>, Status> {
         let input = request.into_inner();
         validate_member_id(input.member_id)?;
-        let stored = self
+
+        let archived_member = self
             .repository
             .archive_member(input.member_id)
             .await
             .map_err(database_status)?;
+
         Ok(ArchiveMemberResponse {
-            member: Some(stored.into()),
+            member: Some(archived_member.into()),
         }
         .into())
     }
@@ -224,6 +240,7 @@ impl members_admin_service_server::MembersAdminService for MembersAdminService {
         request: Request<BulkMemberOperationsRequest>,
     ) -> Result<Response<BulkMemberOperationsResponse>, Status> {
         let operations = request.into_inner().operations;
+
         if operations.len() > self.max_bulk_operations {
             return Err(Status::invalid_argument(format!(
                 "too many operations: got {}, maximum is {} per request",
@@ -231,8 +248,9 @@ impl members_admin_service_server::MembersAdminService for MembersAdminService {
                 self.max_bulk_operations
             )));
         }
+
         let mut results = Vec::with_capacity(operations.len());
-        for (index, operation) in (0u32..).zip(operations) {
+        for (index, operation) in operations.into_iter().enumerate() {
             let outcome = self
                 .apply_operation(operation)
                 .await
@@ -241,11 +259,13 @@ impl members_admin_service_server::MembersAdminService for MembersAdminService {
                         error: format!("{:?}: {}", status.code(), status.message()),
                     })
                 });
+
             results.push(MemberOperationResult {
-                index,
+                index: index as u32,
                 outcome: Some(outcome),
             });
         }
+
         Ok(BulkMemberOperationsResponse { results }.into())
     }
 }
@@ -267,6 +287,7 @@ fn changed_fields(
         ("updated_at", before.updated_at != after.updated_at),
         ("archived_at", before.archived_at != after.archived_at),
     ];
+
     prost_types::FieldMask {
         paths: fields
             .into_iter()
@@ -291,6 +312,7 @@ impl From<OperationOutcome> for Outcome {
             OperationOutcome::Updated { before, after } => {
                 let before = before.into();
                 let after = after.into();
+
                 Outcome::Updated(Box::new(MemberUpdated {
                     changed_fields: Some(changed_fields(&before, &after)),
                     before: Some(before),
@@ -315,6 +337,7 @@ mod tests {
             .connect_lazy("postgres://localhost/unused")
             .unwrap();
         pool.close().await;
+
         MembersAdminService::new(MembersRepository::new(pool), 10_000)
     }
 
@@ -330,6 +353,7 @@ mod tests {
     #[tokio::test]
     async fn validation_precedes_database_access() {
         let service = disconnected_service().await;
+
         for field in 0..3 {
             let mut value = input("a@example.org");
             match field {
@@ -337,6 +361,7 @@ mod tests {
                 1 => value.first_name.clear(),
                 _ => value.last_name = "  ".into(),
             }
+
             assert_eq!(
                 service
                     .create_member(Request::new(value))
@@ -346,6 +371,7 @@ mod tests {
                 Code::InvalidArgument
             );
         }
+
         for (joined_at, message) in [
             (
                 prost_types::Timestamp {
@@ -366,6 +392,7 @@ mod tests {
                 }))
                 .await
                 .unwrap_err();
+
             assert_eq!(error.code(), Code::InvalidArgument);
             assert_eq!(error.message(), message);
         }
@@ -398,6 +425,7 @@ mod tests {
             }))
             .await
             .unwrap_err();
+
         assert_eq!(error.code(), Code::InvalidArgument);
         assert_eq!(
             error.message(),
@@ -425,18 +453,23 @@ mod tests {
             })),
             operation(Operation::Create(input("valid@example.org"))),
         ];
+
         let results = service
             .bulk_member_operations(Request::new(BulkMemberOperationsRequest { operations }))
             .await
             .unwrap()
             .into_inner()
             .results;
+
         assert_eq!(results.len(), 7);
+
         for (index, result) in results.into_iter().enumerate() {
             assert_eq!(result.index, index as u32);
+
             let Some(Outcome::Failed(failure)) = result.outcome else {
                 panic!("expected per-operation failure")
             };
+
             let expected = [
                 "operation is required",
                 "upsert member is required",
@@ -446,6 +479,7 @@ mod tests {
                 "joined_at is invalid",
                 "database unavailable",
             ][index];
+
             assert!(failure.error.contains(expected), "{}", failure.error);
         }
     }
@@ -455,6 +489,7 @@ mod tests {
         let service = disconnected_service().await;
         let discord_error =
             "discord_id must be a positive unsigned 64-bit integer containing only digits";
+
         for (email, discord_id, message) in [
             ("invalid", None, "email must be a valid email address"),
             ("member@", None, "email must be a valid email address"),
@@ -475,6 +510,7 @@ mod tests {
                 discord_id: create.discord_id.clone(),
                 ..Default::default()
             };
+
             for error in [
                 service
                     .create_member(Request::new(create.clone()))
@@ -488,6 +524,7 @@ mod tests {
                 assert_eq!(error.code(), Code::InvalidArgument);
                 assert_eq!(error.message(), message);
             }
+
             let results = service
                 .bulk_member_operations(Request::new(BulkMemberOperationsRequest {
                     operations: vec![
@@ -502,6 +539,7 @@ mod tests {
                 .unwrap()
                 .into_inner()
                 .results;
+
             for result in results {
                 let Some(Outcome::Failed(error)) = result.outcome else {
                     panic!("expected validation failure");
@@ -512,11 +550,13 @@ mod tests {
                 );
             }
         }
+
         for discord_id in [None, Some("1"), Some("18446744073709551615")] {
             let create = CreateMemberRequest {
                 discord_id: discord_id.map(str::to_owned),
                 ..input("member+tag@example.org")
             };
+
             assert_eq!(
                 service
                     .create_member(Request::new(create.clone()))
@@ -525,6 +565,7 @@ mod tests {
                     .code(),
                 Code::Unavailable
             );
+
             assert_eq!(
                 service
                     .update_member(Request::new(UpdateMemberRequest {
@@ -539,6 +580,7 @@ mod tests {
                 Code::Unavailable
             );
         }
+
         // "" is not a valid ID on create, but on update it unlinks Discord.
         let error = service
             .create_member(Request::new(CreateMemberRequest {
@@ -547,7 +589,9 @@ mod tests {
             }))
             .await
             .unwrap_err();
+
         assert_eq!(error.message(), discord_error);
+
         let error = service
             .update_member(Request::new(UpdateMemberRequest {
                 member_id: 1,
@@ -566,14 +610,17 @@ mod tests {
                 member_id: 1,
                 ..Default::default()
             };
+
             match field {
                 "email" => input.email = Some("  ".into()),
                 "first_name" => input.first_name = Some("  ".into()),
                 _ => input.last_name = Some("  ".into()),
             }
+
             let Err(error) = UpdateMember::try_from(input) else {
                 panic!("expected blank {field} to be rejected");
             };
+
             assert_eq!(error.code(), Code::InvalidArgument);
             assert_eq!(error.message(), format!("{field} is required"));
         }
@@ -584,16 +631,20 @@ mod tests {
         let Ok(url) = std::env::var("TEST_DATABASE_URL") else {
             return;
         };
+
         let pool = PgPoolOptions::new()
             .max_connections(1)
             .connect(&url)
             .await
             .unwrap();
+
         sqlx::query(r#"CREATE TEMP TABLE "Member" (LIKE public."Member" INCLUDING ALL)"#)
             .execute(&pool)
             .await
             .unwrap();
+
         let service = MembersAdminService::new(MembersRepository::new(pool.clone()), 10_000);
+
         let created = service
             .create_member(Request::new(input("one@example.org")))
             .await
@@ -601,12 +652,15 @@ mod tests {
             .into_inner()
             .member
             .unwrap();
+
         assert!(created.member_id > 0);
         assert!(created.joined_at.is_some());
+
         let error = service
             .create_member(Request::new(input("one@example.org")))
             .await
             .unwrap_err();
+
         assert_eq!(error.code(), Code::AlreadyExists);
         assert_eq!(error.message(), "email already exists");
 
@@ -621,7 +675,9 @@ mod tests {
             .into_inner()
             .member
             .unwrap();
+
         assert_eq!(linked.discord_id.as_deref(), Some("42"));
+
         let error = service
             .create_member(Request::new(CreateMemberRequest {
                 discord_id: Some("42".into()),
@@ -629,8 +685,10 @@ mod tests {
             }))
             .await
             .unwrap_err();
+
         assert_eq!(error.code(), Code::AlreadyExists);
         assert_eq!(error.message(), "discord_id already exists");
+
         let kept = service
             .update_member(Request::new(UpdateMemberRequest {
                 member_id: created.member_id,
@@ -642,7 +700,9 @@ mod tests {
             .into_inner()
             .member
             .unwrap();
+
         assert_eq!(kept.discord_id.as_deref(), Some("42"));
+
         let unlinked = service
             .update_member(Request::new(UpdateMemberRequest {
                 member_id: created.member_id,
@@ -667,9 +727,11 @@ mod tests {
             .into_inner()
             .member
             .unwrap();
+
         assert_eq!(updated.first_name, "New");
         assert_eq!(updated.email, created.email);
         assert_eq!(updated.joined_at, created.joined_at);
+
         let archived = service
             .archive_member(Request::new(ArchiveMemberRequest {
                 member_id: created.member_id,
@@ -679,8 +741,10 @@ mod tests {
             .into_inner()
             .member
             .unwrap();
+
         assert!(archived.archived_at.is_some());
         assert_eq!(archived.archived_at, archived.updated_at);
+
         assert_eq!(
             service
                 .archive_member(Request::new(ArchiveMemberRequest {
@@ -692,6 +756,7 @@ mod tests {
                 .member,
             Some(archived.clone())
         );
+
         for error in [
             service
                 .update_member(Request::new(UpdateMemberRequest {
@@ -715,6 +780,7 @@ mod tests {
             first_name: "Changed".into(),
             ..member.clone()
         };
+
         let results = service
             .bulk_member_operations(Request::new(BulkMemberOperationsRequest {
                 operations: vec![
@@ -735,19 +801,24 @@ mod tests {
             .unwrap()
             .into_inner()
             .results;
+
         for (index, result) in results.iter().enumerate() {
             assert_eq!(result.index, index as u32);
         }
+
         assert!(matches!(results[0].outcome, Some(Outcome::Created(_))));
         assert!(matches!(results[1].outcome, Some(Outcome::Failed(_))));
+
         let Some(Outcome::Updated(event)) = &results[2].outcome else {
             panic!("expected upsert update");
         };
         assert_eq!(event.after.as_ref().unwrap().first_name, "Changed");
+
         let Some(Outcome::Unchanged(unchanged)) = &results[3].outcome else {
             panic!("expected unchanged upsert");
         };
         assert_eq!(unchanged.member, event.after);
+
         assert!(matches!(results[4].outcome, Some(Outcome::Created(_))));
 
         let bulk_id = event.after.as_ref().unwrap().member_id;
@@ -763,6 +834,7 @@ mod tests {
                 .code(),
             Code::AlreadyExists
         );
+
         let results = service
             .bulk_member_operations(Request::new(BulkMemberOperationsRequest {
                 operations: vec![
@@ -782,15 +854,19 @@ mod tests {
             .unwrap()
             .into_inner()
             .results;
+
         let Some(Outcome::Archived(first)) = &results[0].outcome else {
             panic!("expected archive");
         };
+
         for result in &results[1..] {
             let Some(Outcome::Unchanged(value)) = &result.outcome else {
                 panic!("expected unchanged member");
             };
+
             assert_eq!(value.member, first.member);
         }
+
         pool.close().await;
     }
 }

@@ -9,6 +9,7 @@ pub mod page;
 
 pub fn database_status(error: sqlx::Error) -> Status {
     tracing::error!(%error, "database operation failed");
+
     match error {
         sqlx::Error::PoolClosed
         | sqlx::Error::PoolTimedOut
@@ -49,6 +50,7 @@ pub(crate) fn validate_member_id(value: i32) -> Result<(), Status> {
             "member_id must be a positive integer",
         ));
     }
+
     Ok(())
 }
 
@@ -58,6 +60,7 @@ pub(crate) fn validate_email(value: &str) -> Result<(), Status> {
             "email must be a valid email address",
         ));
     }
+
     Ok(())
 }
 
@@ -70,6 +73,7 @@ pub(crate) fn validate_discord_id(value: &str) -> Result<(), Status> {
             "discord_id must be a positive unsigned 64-bit integer containing only digits",
         ));
     }
+
     Ok(())
 }
 
@@ -92,9 +96,11 @@ mod tests {
             assert_eq!(status.code(), Code::Unavailable);
             assert_eq!(status.message(), "database unavailable");
         }
+
         let status = database_status(sqlx::Error::RowNotFound);
         assert_eq!(status.code(), Code::NotFound);
         assert_eq!(status.message(), "record not found");
+
         let status = database_status(sqlx::Error::ColumnNotFound("private column".into()));
         assert_eq!(status.code(), Code::Internal);
         assert_eq!(status.message(), "database operation failed");
@@ -107,6 +113,7 @@ mod tests {
             assert_eq!(error.code(), Code::InvalidArgument);
             assert_eq!(error.message(), "joined_at is invalid");
         }
+
         for seconds in [-62_135_596_800, -1, 0, 253_402_300_799] {
             let value = parse_timestamp(
                 Timestamp {
@@ -116,6 +123,7 @@ mod tests {
                 "joined_at",
             )
             .unwrap();
+
             assert_eq!(
                 timestamp(value),
                 Timestamp {
@@ -131,6 +139,7 @@ mod tests {
         let value = DateTime::parse_from_rfc3339("1969-12-31T23:59:59.123456Z")
             .unwrap()
             .with_timezone(&Utc);
+
         assert_eq!(
             timestamp(value),
             Timestamp {

@@ -15,33 +15,42 @@ pub struct Page {
 impl Page {
     pub fn new(page_size: i32, token: &str, scope: &str) -> Result<Self, PageError> {
         let size = usize::try_from(page_size)?;
+
         let size = match size {
             0 => DEFAULT_PAGE_SIZE,
             size => size.min(MAX_PAGE_SIZE),
         };
+
         if scope.is_empty() || scope.contains(':') {
             return Err(PageError::InvalidScope);
         }
+
         let after = if token.is_empty() {
             None
         } else {
             let (token_scope, cursor) =
                 token.split_once(':').ok_or(PageError::InvalidTokenFormat)?;
+
             if token_scope != scope {
                 return Err(PageError::FilterMismatch);
             }
+
             if cursor.is_empty() {
                 return Err(PageError::MissingCursor);
             }
+
             if !cursor.bytes().all(|byte| byte.is_ascii_digit()) {
                 return Err(PageError::InvalidCursorDigits);
             }
+
             let id = cursor.parse::<i32>()?;
             if id == 0 {
                 return Err(PageError::NonPositiveCursor);
             }
+
             Some(id)
         };
+
         Ok(Self {
             size,
             after,
@@ -64,6 +73,7 @@ impl Page {
         } else {
             String::new()
         };
+
         (items, next_page_token)
     }
 }
@@ -78,6 +88,7 @@ mod tests {
         assert_eq!(Page::new(0, "", "0").unwrap().fetch_limit(), 51);
         assert_eq!(Page::new(1, "", "0").unwrap().fetch_limit(), 2);
         assert_eq!(Page::new(i32::MAX, "", "0").unwrap().fetch_limit(), 101);
+
         let error = Status::from(Page::new(-1, "", "0").unwrap_err());
         assert_eq!(error.code(), Code::InvalidArgument);
         assert_eq!(error.message(), "page_size must not be negative");
@@ -86,10 +97,12 @@ mod tests {
     #[test]
     fn tokens_round_trip_for_different_scopes_and_integer_boundaries() {
         assert_eq!(Page::new(1, "", "0").unwrap().after(), None);
+
         for scope in ["0", "1", "another-service"] {
             for id in [1, 10, i32::MAX] {
                 let page = Page::new(1, "", scope).unwrap();
                 let (items, token) = page.finish(vec![id, id], |item| *item);
+
                 assert_eq!(items, vec![id]);
                 assert_eq!(token, format!("{scope}:{id}"));
                 assert_eq!(Page::new(1, &token, scope).unwrap().after(), Some(id));
@@ -100,9 +113,11 @@ mod tests {
     #[test]
     fn only_an_extra_row_produces_a_next_page() {
         let page = Page::new(2, "", "0").unwrap();
+
         for items in [vec![], vec![1], vec![1, 2]] {
             assert_eq!(page.finish(items.clone(), |id| *id), (items, String::new()));
         }
+
         assert_eq!(
             page.finish(vec![1, 2, 3], |id| *id),
             (vec![1, 2], "0:2".into())
@@ -116,9 +131,11 @@ mod tests {
         let error = Page::new(1, "0:2147483648", "0").unwrap_err();
         assert!(matches!(error, PageError::CursorOutOfRange(_)));
         assert!(error.source().is_some());
+
         let error = Page::new(-1, "", "0").unwrap_err();
         assert!(matches!(error, PageError::NegativePageSize(_)));
         assert!(error.source().is_some());
+
         for scope in ["", "invalid:scope"] {
             let error = Page::new(1, "", scope).unwrap_err();
             assert!(matches!(error, PageError::InvalidScope));
@@ -142,6 +159,7 @@ mod tests {
             assert_eq!(error.code(), Code::InvalidArgument);
             assert_eq!(error.message(), message);
         }
+
         for token in ["0:-1", "0:+1", "0:1:2", "0: 1", "0:1.5", "0:１２"] {
             let error = Status::from(Page::new(1, token, "0").unwrap_err());
             assert_eq!(error.code(), Code::InvalidArgument);

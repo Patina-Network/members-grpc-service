@@ -2,7 +2,7 @@ FROM mirror.gcr.io/library/rust:1-alpine3.24 AS build
 
 WORKDIR /app
 
-RUN apk add --no-cache musl-dev=1.2.6-r2 protobuf-dev=31.1-r1
+RUN apk add --no-cache 'musl-dev=~1.2.6' 'protobuf-dev=~31.1'
 
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY proto ./proto

@@ -3,7 +3,6 @@ use prost_types::Timestamp;
 use tonic::Status;
 
 pub mod members;
-pub mod members_admin;
 pub mod metrics;
 pub mod page;
 
@@ -19,6 +18,8 @@ pub fn database_status(error: sqlx::Error) -> Status {
             Status::already_exists(match db.constraint() {
                 Some("Member_email_key") => "email already exists",
                 Some("Member_discordId_key") => "discord_id already exists",
+                Some("Member_linkedinUsername_key") => "linkedin_username already exists",
+                Some("Member_instagramUsername_key") => "instagram_username already exists",
                 _ => "record already exists",
             })
         }
@@ -149,6 +150,14 @@ mod tests {
         for (constraint, message) in [
             ("Member_email_key", "email already exists"),
             ("Member_discordId_key", "discord_id already exists"),
+            (
+                "Member_linkedinUsername_key",
+                "linkedin_username already exists",
+            ),
+            (
+                "Member_instagramUsername_key",
+                "instagram_username already exists",
+            ),
             ("Other_key", "record already exists"),
         ] {
             let status =

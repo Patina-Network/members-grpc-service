@@ -3,7 +3,7 @@
 gRPC service that owns Patina Network member records.
 
 - `proto/v1/members.proto`: `members.MembersService`, read-only lookups for any Patina app.
-- `proto/v1/members_admin.proto`: `members.admin.MembersAdminService`, single and bulk write operations for core-admin only.
+- `proto/v1/members_admin.proto`: `members.admin.MembersAdminService`, single and bulk write operations for core-admin only + read lookups for admin-only/sensitive fields.
 
 Both services ship in a single generated client package (`members-grpc-service`).
 
@@ -42,11 +42,12 @@ cargo run # runs http on :3000, grpc on :50051
 
 Each feature has one file per layer, all with the same name. `members` is the reference case:
 
-| File | Holds | May import |
-|---|---|---|
-| `src/domain/members.rs` | Structs (`Member`, `CreateMember`, `UpdateMember`) and the rules on them (`UpdateMember::apply`, `UpsertWrite::new`). No I/O. | Nothing from `db` or `grpc` |
-| `src/db/members.rs` | The `MembersRepository` trait, `PgMembersRepository` (runs the SQL and returns `domain` structs), and `FakeMembersRepository` for tests. | `domain` |
-| `src/grpc/members.rs`, `src/grpc/members_admin.rs` | gRPC handlers, generic over `R: MembersRepository`, and conversions between proto messages and `domain` structs. | `domain`, `db` |
+| File                                                   | Holds                                                                                                                                                                        | May import                  |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
+| `src/domain/members.rs`                                | Structs (`Member`, `CreateMember`, `UpdateMember`) and the rules on them (`UpdateMember::apply`, `UpsertWrite::new`). No I/O.                                                | Nothing from `db` or `grpc` |
+| `src/db/members.rs`                                    | The `MembersRepository` trait, `PgMembersRepository` (runs the SQL and returns `domain` structs), and `FakeMembersRepository` for tests.                                     | `domain`                    |
+| `src/grpc/members/reader.rs`                           | `MembersReader<R, T>`: read calls that both services share, generic over the proto view `T` (`Member` or `SensitiveMember`) to enforce field cleaning before final response. | `domain`, `db`              |
+| `src/grpc/members/mod.rs`, `src/grpc/members/admin.rs` | gRPC handlers for `MembersService` and `MembersAdminService`, generic over `R: MembersRepository`, and proto to `domain` request conversions.                                | `domain`, `db`              |
 
 - New business rules go in `domain/` as plain functions so they can be unit tested without a database or server.
 - Structs that only the repository uses (e.g. `UpdateResult`) stay private in `db/`.

@@ -9,8 +9,8 @@ use tracing::info;
 use members_grpc_service::{
     config::Config,
     db::{client::connect, health_check::HealthCheckRepository, members::PgMembersRepository},
+    grpc::members::admin::{MembersAdminService, MembersAdminServiceServer},
     grpc::members::{MembersService, MembersServiceServer},
-    grpc::members_admin::{MembersAdminService, MembersAdminServiceServer},
     grpc::metrics::GrpcRequestMetricsMiddleware,
     http::{router, state::AppState},
     proto,

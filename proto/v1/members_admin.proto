@@ -10,6 +10,12 @@ option java_package = "org.patinanetwork.grpc.members.admin.v1";
 option java_multiple_files = true;
 
 service MembersAdminService {
+  rpc getSensitiveMember(members.GetMemberRequest)
+      returns (GetSensitiveMemberResponse);
+
+  rpc listSensitiveMembers(members.ListMembersRequest)
+      returns (ListSensitiveMembersResponse);
+
   rpc createMember(CreateMemberRequest) returns (CreateMemberResponse);
 
   rpc updateMember(UpdateMemberRequest) returns (UpdateMemberResponse);
@@ -23,6 +29,30 @@ service MembersAdminService {
       returns (BulkMemberOperationsResponse);
 }
 
+message SensitiveMember {
+  int32 member_id = 1;
+  string email = 2;
+  string first_name = 3;
+  string last_name = 4;
+  google.protobuf.Timestamp joined_at = 5;
+  optional string discord_id = 6;
+  optional string discord_username = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  optional google.protobuf.Timestamp archived_at = 9;
+  optional string linkedin_username = 10;
+  optional string instagram_username = 11;
+  optional string career = 12;
+  optional string industry = 13;
+  optional string profile = 14;
+}
+
+message GetSensitiveMemberResponse { SensitiveMember member = 1; }
+
+message ListSensitiveMembersResponse {
+  repeated SensitiveMember members = 1;
+  string next_page_token = 2;
+}
+
 message CreateMemberRequest {
   string email = 1;
   string first_name = 2;
@@ -30,9 +60,17 @@ message CreateMemberRequest {
   optional google.protobuf.Timestamp joined_at = 4;
   optional string discord_id = 5;
   optional string discord_username = 6;
+  // LinkedIn username (`xyz` for https://www.linkedin.com/in/xyz), if set must
+  // be unique
+  optional string linkedin_username = 7;
+  // Instagram username  (no `@`), if set must be unique
+  optional string instagram_username = 8;
+  optional string career = 9;
+  optional string industry = 10;
+  optional string profile = 11;
 }
 
-message CreateMemberResponse { members.Member member = 1; }
+message CreateMemberResponse { SensitiveMember member = 1; }
 
 message UpdateMemberRequest {
   int32 member_id = 1;
@@ -40,15 +78,27 @@ message UpdateMemberRequest {
   optional string first_name = 3;
   optional string last_name = 4;
   optional google.protobuf.Timestamp joined_at = 5;
+  // unset = dont change, "" clears it
   optional string discord_id = 6;
+  // unset = dont change, "" clears it
   optional string discord_username = 7;
+  // unset = dont change, "" clears it
+  optional string linkedin_username = 8;
+  // unset = dont change, "" clears it
+  optional string instagram_username = 9;
+  // unset = dont change, "" clears it
+  optional string career = 10;
+  // unset = dont change, "" clears it
+  optional string industry = 11;
+  // unset = dont change, "" clears it
+  optional string profile = 12;
 }
 
-message UpdateMemberResponse { members.Member member = 1; }
+message UpdateMemberResponse { SensitiveMember member = 1; }
 
 message ArchiveMemberRequest { int32 member_id = 1; }
 
-message ArchiveMemberResponse { members.Member member = 1; }
+message ArchiveMemberResponse { SensitiveMember member = 1; }
 
 // Create a member, or update the existing member with the same email.
 message UpsertMemberRequest { CreateMemberRequest member = 1; }
@@ -64,19 +114,18 @@ message MemberOperation {
 
 message BulkMemberOperationsRequest { repeated MemberOperation operations = 1; }
 
-message MemberCreated { members.Member member = 1; }
+message MemberCreated { SensitiveMember member = 1; }
 
 message MemberUpdated {
-  members.Member before = 1;
-  members.Member after = 2;
-  // Member field paths that differ between `before` and `after`.
+  SensitiveMember before = 1;
+  SensitiveMember after = 2;
   google.protobuf.FieldMask changed_fields = 3;
 }
 
-message MemberArchived { members.Member member = 1; }
+message MemberArchived { SensitiveMember member = 1; }
 
 // The operation matched an existing member but changed nothing.
-message MemberUnchanged { members.Member member = 1; }
+message MemberUnchanged { SensitiveMember member = 1; }
 
 message MemberOperationFailed { string error = 1; }
 

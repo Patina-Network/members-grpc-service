@@ -11,6 +11,13 @@ service MembersService {
   rpc getMember(GetMemberRequest) returns (GetMemberResponse);
 
   rpc listMembers(ListMembersRequest) returns (ListMembersResponse);
+
+  // Distinct careers stored on members, most common first, for UI autocomplete.
+  rpc listCareers(ListCareersRequest) returns (ListCareersResponse);
+
+  // Distinct industries stored on members, most common first, for UI
+  // autocomplete.
+  rpc listIndustries(ListIndustriesRequest) returns (ListIndustriesResponse);
 }
 
 message Member {
@@ -23,6 +30,14 @@ message Member {
   optional string discord_username = 7;
   google.protobuf.Timestamp updated_at = 8;
   optional google.protobuf.Timestamp archived_at = 9;
+  // LinkedIn username only (`xyz` for https://www.linkedin.com/in/xyz)
+  // must be unique
+  optional string linkedin_username = 10;
+  // Instagram username only, (no `@`)
+  // must be unique
+  optional string instagram_username = 11;
+  optional string career = 12;
+  optional string industry = 13;
 }
 
 message GetMemberRequest {
@@ -45,3 +60,19 @@ message ListMembersResponse {
   repeated Member members = 1;
   string next_page_token = 2;
 }
+
+message ListCareersRequest {
+  string query = 1;
+  // default of 10, clamps at 50
+  uint32 limit = 2;
+}
+
+message ListCareersResponse { repeated string careers = 1; }
+
+message ListIndustriesRequest {
+  string query = 1;
+  // default of 10, clamps at 50
+  uint32 limit = 2;
+}
+
+message ListIndustriesResponse { repeated string industries = 1; }

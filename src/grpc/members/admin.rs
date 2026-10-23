@@ -7,32 +7,44 @@ use tonic::{Request, Response, Status};
 use crate::{
     db::members::MembersRepository,
     domain::members::{
-        CreateMember, MemberIdentifier, OperationOutcome, UpdateMember, UpsertWrite,
+        CreateMember, Member as StoredMember, MemberIdentifier, OperationOutcome, UpdateMember,
+        UpsertWrite,
     },
     grpc::{
         database_status, parse_timestamp, validate_discord_id, validate_email, validate_member_id,
     },
-    proto::members::admin::{
-        ArchiveMemberRequest, ArchiveMemberResponse, BulkMemberOperationsRequest,
-        BulkMemberOperationsResponse, CreateMemberRequest, CreateMemberResponse, MemberArchived,
-        MemberCreated, MemberOperation, MemberOperationFailed, MemberOperationResult,
-        MemberUnchanged, MemberUpdated, UpdateMemberRequest, UpdateMemberResponse,
-        member_operation::Operation, member_operation_result::Outcome,
-        members_admin_service_server,
+    proto::members::{
+        GetMemberRequest, ListMembersRequest,
+        admin::{
+            ArchiveMemberRequest, ArchiveMemberResponse, BulkMemberOperationsRequest,
+            BulkMemberOperationsResponse, CreateMemberRequest, CreateMemberResponse,
+            GetSensitiveMemberResponse, ListSensitiveMembersResponse, MemberArchived,
+            MemberCreated, MemberOperation, MemberOperationFailed, MemberOperationResult,
+            MemberUnchanged, MemberUpdated, SensitiveMember, UpdateMemberRequest,
+            UpdateMemberResponse, member_operation::Operation, member_operation_result::Outcome,
+            members_admin_service_server,
+        },
     },
 };
+
+use super::reader::MembersReader;
 
 pub use members_admin_service_server::MembersAdminServiceServer;
 
 pub struct MembersAdminService<R> {
     repository: R,
+    reader: MembersReader<R, SensitiveMember>,
     max_bulk_operations: usize,
     operation_timeout: Duration,
 }
 
 impl<R: MembersRepository> MembersAdminService<R> {
-    pub fn new(repository: R, max_bulk_operations: usize, operation_timeout: Duration) -> Self {
+    pub fn new(repository: R, max_bulk_operations: usize, operation_timeout: Duration) -> Self
+    where
+        R: Clone,
+    {
         Self {
+            reader: MembersReader::new(repository.clone()),
             repository,
             max_bulk_operations,
             operation_timeout,
@@ -100,6 +112,41 @@ fn required(value: &str, field: &str) -> Result<(), Status> {
     Ok(())
 }
 
+fn validate_username(value: &str, field: &str) -> Result<(), Status> {
+    required(value, field)?;
+    if value
+        .chars()
+        .any(|c| c.is_whitespace() || matches!(c, '/' | '@' | '?' | '#'))
+    {
+        return Err(Status::invalid_argument(format!(
+            "{field} must be a bare username, not a URL or @handle"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_optional(
+    value: &Option<String>,
+    validate: impl FnOnce(&str) -> Result<(), Status>,
+) -> Result<(), Status> {
+    value.as_deref().map_or(Ok(()), validate)
+}
+
+fn clearable(
+    value: Option<String>,
+    validate: impl FnOnce(&str) -> Result<(), Status>,
+) -> Result<Option<Option<String>>, Status> {
+    value
+        .map(|value| {
+            if value.is_empty() {
+                return Ok(None);
+            }
+            validate(&value)?;
+            Ok(Some(value))
+        })
+        .transpose()
+}
+
 fn parse_joined_at(value: Option<Timestamp>) -> Result<Option<DateTime<Utc>>, Status> {
     value
         .map(|value| {
@@ -123,12 +170,10 @@ impl TryFrom<CreateMemberRequest> for CreateMember {
         required(&input.email, "email")?;
         validate_email(&input.email)?;
 
-        if let Some(id) = &input.discord_id {
-            validate_discord_id(id)?;
-        }
-        if let Some(name) = &input.discord_username {
-            required(name, "discord_username")?;
-        }
+        validate_optional(&input.discord_id, validate_discord_id)?;
+        validate_optional(&input.discord_username, |name| {
+            required(name, "discord_username")
+        })?;
         if input.discord_id.is_some() != input.discord_username.is_some() {
             return Err(Status::invalid_argument(
                 "discord_id and discord_username must be set or cleared together",
@@ -138,6 +183,16 @@ impl TryFrom<CreateMemberRequest> for CreateMember {
         required(&input.first_name, "first_name")?;
         required(&input.last_name, "last_name")?;
 
+        validate_optional(&input.linkedin_username, |value| {
+            validate_username(value, "linkedin_username")
+        })?;
+        validate_optional(&input.instagram_username, |value| {
+            validate_username(value, "instagram_username")
+        })?;
+        validate_optional(&input.career, |value| required(value, "career"))?;
+        validate_optional(&input.industry, |value| required(value, "industry"))?;
+        validate_optional(&input.profile, |value| required(value, "profile"))?;
+
         Ok(Self {
             joined_at: parse_joined_at(input.joined_at)?,
             email: input.email,
@@ -145,6 +200,11 @@ impl TryFrom<CreateMemberRequest> for CreateMember {
             last_name: input.last_name,
             discord_id: input.discord_id,
             discord_username: input.discord_username,
+            linkedin_username: input.linkedin_username,
+            instagram_username: input.instagram_username,
+            career: input.career,
+            industry: input.industry,
+            profile: input.profile,
         })
     }
 }
@@ -155,17 +215,10 @@ impl TryFrom<UpdateMemberRequest> for UpdateMember {
     fn try_from(input: UpdateMemberRequest) -> Result<Self, Status> {
         validate_member_id(input.member_id)?;
 
-        // An explicit "" clears the Discord field; anything else must be valid.
-        if let Some(id) = input.discord_id.as_deref().filter(|id| !id.is_empty()) {
-            validate_discord_id(id)?;
-        }
-        if let Some(name) = input
-            .discord_username
-            .as_deref()
-            .filter(|name| !name.is_empty())
-        {
-            required(name, "discord_username")?;
-        }
+        let discord_id = clearable(input.discord_id, validate_discord_id)?;
+        let discord_username = clearable(input.discord_username, |name| {
+            required(name, "discord_username")
+        })?;
 
         if let Some(value) = &input.email {
             required(value, "email")?;
@@ -179,16 +232,29 @@ impl TryFrom<UpdateMemberRequest> for UpdateMember {
             required(value, "last_name")?;
         }
 
+        let linkedin_username = clearable(input.linkedin_username, |value| {
+            validate_username(value, "linkedin_username")
+        })?;
+        let instagram_username = clearable(input.instagram_username, |value| {
+            validate_username(value, "instagram_username")
+        })?;
+        let career = clearable(input.career, |value| required(value, "career"))?;
+        let industry = clearable(input.industry, |value| required(value, "industry"))?;
+        let profile = clearable(input.profile, |value| required(value, "profile"))?;
+
         Ok(Self {
             member_id: input.member_id,
             joined_at: parse_joined_at(input.joined_at)?,
             email: input.email,
             first_name: input.first_name,
             last_name: input.last_name,
-            discord_id: input.discord_id.map(|id| (!id.is_empty()).then_some(id)),
-            discord_username: input
-                .discord_username
-                .map(|name| (!name.is_empty()).then_some(name)),
+            discord_id,
+            discord_username,
+            linkedin_username,
+            instagram_username,
+            career,
+            industry,
+            profile,
         })
     }
 }
@@ -197,6 +263,31 @@ impl TryFrom<UpdateMemberRequest> for UpdateMember {
 impl<R: MembersRepository> members_admin_service_server::MembersAdminService
     for MembersAdminService<R>
 {
+    async fn get_sensitive_member(
+        &self,
+        request: Request<GetMemberRequest>,
+    ) -> Result<Response<GetSensitiveMemberResponse>, Status> {
+        let member = self.reader.get(request.into_inner()).await?;
+
+        Ok(GetSensitiveMemberResponse {
+            member: Some(member),
+        }
+        .into())
+    }
+
+    async fn list_sensitive_members(
+        &self,
+        request: Request<ListMembersRequest>,
+    ) -> Result<Response<ListSensitiveMembersResponse>, Status> {
+        let (members, next_page_token) = self.reader.list(request.into_inner()).await?;
+
+        Ok(ListSensitiveMembersResponse {
+            members,
+            next_page_token,
+        }
+        .into())
+    }
+
     async fn create_member(
         &self,
         request: Request<CreateMemberRequest>,
@@ -300,10 +391,7 @@ impl<R: MembersRepository> members_admin_service_server::MembersAdminService
     }
 }
 
-fn changed_fields(
-    before: &crate::proto::members::Member,
-    after: &crate::proto::members::Member,
-) -> prost_types::FieldMask {
+fn changed_fields(before: &StoredMember, after: &StoredMember) -> prost_types::FieldMask {
     let fields = [
         ("email", before.email != after.email),
         ("first_name", before.first_name != after.first_name),
@@ -316,6 +404,17 @@ fn changed_fields(
         ),
         ("updated_at", before.updated_at != after.updated_at),
         ("archived_at", before.archived_at != after.archived_at),
+        (
+            "linkedin_username",
+            before.linkedin_username != after.linkedin_username,
+        ),
+        (
+            "instagram_username",
+            before.instagram_username != after.instagram_username,
+        ),
+        ("career", before.career != after.career),
+        ("industry", before.industry != after.industry),
+        ("profile", before.profile != after.profile),
     ];
 
     prost_types::FieldMask {
@@ -340,13 +439,10 @@ impl From<OperationOutcome> for Outcome {
                 member: Some(member.into()),
             }),
             OperationOutcome::Updated { before, after } => {
-                let before = before.into();
-                let after = after.into();
-
                 Outcome::Updated(Box::new(MemberUpdated {
                     changed_fields: Some(changed_fields(&before, &after)),
-                    before: Some(before),
-                    after: Some(after),
+                    before: Some((*before).into()),
+                    after: Some((*after).into()),
                 }))
             }
         }
@@ -447,8 +543,11 @@ mod tests {
                 .is_empty()
         );
 
-        let limited =
-            MembersAdminService::new(service.repository.clone(), 1, Duration::from_secs(5));
+        let limited = MembersAdminService::new(
+            FakeMembersRepository::Unavailable,
+            1,
+            Duration::from_secs(5),
+        );
         let error = limited
             .bulk_member_operations(Request::new(BulkMemberOperationsRequest {
                 operations: vec![MemberOperation::default(), MemberOperation::default()],
@@ -724,30 +823,160 @@ mod tests {
 
     #[test]
     fn changed_fields_lists_only_differing_fields() {
-        let before = crate::proto::members::Member {
-            email: "a@example.org".into(),
+        let before = StoredMember {
             discord_id: Some("1".into()),
             discord_username: Some("name".into()),
-            ..Default::default()
+            profile: Some("notes".into()),
+            ..stored(1)
         };
 
         assert!(changed_fields(&before, &before).paths.is_empty());
 
-        let after = crate::proto::members::Member {
+        let after = StoredMember {
             email: "b@example.org".into(),
             discord_id: None,
             discord_username: None,
+            career: Some("Designer".into()),
+            profile: None,
             ..before.clone()
         };
 
         assert_eq!(
             changed_fields(&before, &after).paths,
-            ["email", "discord_id", "discord_username"]
+            [
+                "email",
+                "discord_id",
+                "discord_username",
+                "career",
+                "profile"
+            ]
         );
     }
 
-    fn stored(id: i32) -> crate::domain::members::Member {
-        crate::domain::members::Member {
+    #[tokio::test]
+    async fn optional_profile_fields_are_validated_on_every_write_path() {
+        let service = disconnected_service();
+        let url_error = "linkedin_username must be a bare username, not a URL or @handle";
+        let handle_error = "instagram_username must be a bare username, not a URL or @handle";
+
+        for (create, message) in [
+            (
+                CreateMemberRequest {
+                    linkedin_username: Some("https://www.linkedin.com/in/xyz".into()),
+                    ..input("a@example.org")
+                },
+                url_error,
+            ),
+            (
+                CreateMemberRequest {
+                    linkedin_username: Some("in/xyz".into()),
+                    ..input("a@example.org")
+                },
+                url_error,
+            ),
+            (
+                CreateMemberRequest {
+                    instagram_username: Some("@xyz".into()),
+                    ..input("a@example.org")
+                },
+                handle_error,
+            ),
+            (
+                CreateMemberRequest {
+                    instagram_username: Some("x yz".into()),
+                    ..input("a@example.org")
+                },
+                handle_error,
+            ),
+            (
+                CreateMemberRequest {
+                    career: Some(" ".into()),
+                    ..input("a@example.org")
+                },
+                "career is required",
+            ),
+            (
+                CreateMemberRequest {
+                    industry: Some(String::new()),
+                    ..input("a@example.org")
+                },
+                "industry is required",
+            ),
+            (
+                CreateMemberRequest {
+                    profile: Some("\n".into()),
+                    ..input("a@example.org")
+                },
+                "profile is required",
+            ),
+        ] {
+            let update = UpdateMemberRequest {
+                member_id: 1,
+                linkedin_username: create.linkedin_username.clone(),
+                instagram_username: create.instagram_username.clone(),
+                career: create.career.clone(),
+                industry: create.industry.clone().filter(|value| !value.is_empty()),
+                profile: create.profile.clone(),
+                ..Default::default()
+            };
+
+            let mut errors = vec![
+                service
+                    .create_member(Request::new(create.clone()))
+                    .await
+                    .unwrap_err(),
+            ];
+            if update
+                != (UpdateMemberRequest {
+                    member_id: 1,
+                    ..Default::default()
+                })
+            {
+                errors.push(
+                    service
+                        .update_member(Request::new(update))
+                        .await
+                        .unwrap_err(),
+                );
+            }
+
+            let results = service
+                .bulk_member_operations(Request::new(BulkMemberOperationsRequest {
+                    operations: vec![operation(Operation::Upsert(UpsertMemberRequest {
+                        member: Some(create),
+                    }))],
+                }))
+                .await
+                .unwrap()
+                .into_inner()
+                .results;
+            let Some(Outcome::Failed(failure)) = &results[0].outcome else {
+                panic!("expected upsert validation failure");
+            };
+            assert_eq!(failure.error, format!("InvalidArgument: {message}"));
+
+            for error in errors {
+                assert_eq!(error.code(), Code::InvalidArgument);
+                assert_eq!(error.message(), message);
+            }
+        }
+
+        let error = service
+            .create_member(Request::new(CreateMemberRequest {
+                linkedin_username: Some("xyz-123".into()),
+                instagram_username: Some("x.y_z".into()),
+                career: Some("Software Engineer".into()),
+                industry: Some("Technology".into()),
+                profile: Some("notes".into()),
+                ..input("a@example.org")
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Code::Unavailable);
+    }
+
+    fn stored(id: i32) -> StoredMember {
+        StoredMember {
             id,
             email: format!("m{id}@example.org"),
             first_name: "First".into(),
@@ -755,6 +984,11 @@ mod tests {
             joined_at: DateTime::UNIX_EPOCH,
             discord_id: None,
             discord_username: None,
+            linkedin_username: Some(format!("member-{id}")),
+            instagram_username: None,
+            career: Some("Engineer".into()),
+            industry: None,
+            profile: Some(format!("notes {id}")),
             updated_at: DateTime::UNIX_EPOCH,
             archived_at: (id == 2).then_some(DateTime::UNIX_EPOCH),
         }
@@ -769,6 +1003,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sensitive_reads_include_admin_only_fields() {
+        let service = stored_service();
+
+        let member = service
+            .get_sensitive_member(Request::new(GetMemberRequest {
+                identifier: Some(
+                    crate::proto::members::get_member_request::Identifier::Email(
+                        "m1@example.org".into(),
+                    ),
+                ),
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .member
+            .unwrap();
+        assert_eq!(member.profile.as_deref(), Some("notes 1"));
+        assert_eq!(member.linkedin_username.as_deref(), Some("member-1"));
+
+        let error = service
+            .get_sensitive_member(Request::new(GetMemberRequest { identifier: None }))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Code::InvalidArgument);
+
+        let page = service
+            .list_sensitive_members(Request::new(ListMembersRequest {
+                include_archived: true,
+                page_size: 1,
+                page_token: String::new(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(page.next_page_token, "1:1");
+        let profiles: Vec<_> = page
+            .members
+            .iter()
+            .map(|member| member.profile.as_deref())
+            .collect();
+        assert_eq!(profiles, [Some("notes 1")]);
+    }
+
+    #[tokio::test]
     async fn single_writes_return_the_stored_member() {
         let service = stored_service();
         let joined_at = Timestamp {
@@ -779,6 +1057,7 @@ mod tests {
         let created = service
             .create_member(Request::new(CreateMemberRequest {
                 joined_at: Some(joined_at),
+                profile: Some("new notes".into()),
                 ..input("new@example.org")
             }))
             .await
@@ -786,6 +1065,7 @@ mod tests {
             .into_inner()
             .member
             .unwrap();
+        assert_eq!(created.profile.as_deref(), Some("new notes"));
         assert_eq!(created.member_id, 3);
         assert_eq!(created.joined_at, Some(joined_at));
 
@@ -793,6 +1073,8 @@ mod tests {
             .update_member(Request::new(UpdateMemberRequest {
                 member_id: 1,
                 first_name: Some("New".into()),
+                linkedin_username: Some(String::new()),
+                industry: Some("Finance".into()),
                 ..Default::default()
             }))
             .await
@@ -800,8 +1082,12 @@ mod tests {
             .into_inner()
             .member
             .unwrap();
+        assert_eq!(updated.profile.as_deref(), Some("notes 1"));
         assert_eq!(updated.first_name, "New");
         assert_eq!(updated.last_name, "Last");
+        assert_eq!(updated.linkedin_username, None);
+        assert_eq!(updated.career.as_deref(), Some("Engineer"));
+        assert_eq!(updated.industry.as_deref(), Some("Finance"));
 
         let archived = service
             .archive_member(Request::new(ArchiveMemberRequest { member_id: 1 }))
@@ -848,6 +1134,11 @@ mod tests {
                     operation(Operation::Upsert(UpsertMemberRequest {
                         member: Some(changed("fresh@example.org")),
                     })),
+                    operation(Operation::Update(UpdateMemberRequest {
+                        member_id: 1,
+                        profile: Some("rewritten".into()),
+                        ..Default::default()
+                    })),
                 ],
             }))
             .await
@@ -880,6 +1171,7 @@ mod tests {
                 ("unchanged", "First".to_owned()),
                 ("updated", "first_name".to_owned()),
                 ("created", "Changed".to_owned()),
+                ("updated", "profile".to_owned()),
             ]
         );
     }

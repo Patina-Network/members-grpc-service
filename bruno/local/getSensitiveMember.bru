@@ -1,0 +1,22 @@
+meta {
+  name: getSensitiveMember
+  type: grpc
+  seq: 7
+}
+
+grpc {
+  url: localhost:50051
+  method: /members.admin.MembersAdminService/getSensitiveMember
+  body: grpc
+  auth: none
+  methodType: unary
+}
+
+body:grpc {
+  name: message 1
+  content: '''
+    {
+      "member_id": 1
+    }
+  '''
+}

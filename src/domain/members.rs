@@ -9,6 +9,11 @@ pub struct Member {
     pub joined_at: DateTime<Utc>,
     pub discord_id: Option<String>,
     pub discord_username: Option<String>,
+    pub linkedin_username: Option<String>,
+    pub instagram_username: Option<String>,
+    pub career: Option<String>,
+    pub industry: Option<String>,
+    pub profile: Option<String>,
     pub updated_at: DateTime<Utc>,
     pub archived_at: Option<DateTime<Utc>>,
 }
@@ -19,6 +24,12 @@ pub enum MemberIdentifier {
     DiscordId(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutocompleteField {
+    Career,
+    Industry,
+}
+
 pub struct CreateMember {
     pub email: String,
     pub first_name: String,
@@ -26,6 +37,11 @@ pub struct CreateMember {
     pub joined_at: Option<DateTime<Utc>>,
     pub discord_id: Option<String>,
     pub discord_username: Option<String>,
+    pub linkedin_username: Option<String>,
+    pub instagram_username: Option<String>,
+    pub career: Option<String>,
+    pub industry: Option<String>,
+    pub profile: Option<String>,
 }
 
 pub struct UpdateMember {
@@ -38,12 +54,25 @@ pub struct UpdateMember {
     pub discord_id: Option<Option<String>>,
     /// `None` = dont change, `Some(None)` clears it
     pub discord_username: Option<Option<String>>,
+    /// `None` = dont change, `Some(None)` clears it
+    pub linkedin_username: Option<Option<String>>,
+    /// `None` = dont change, `Some(None)` clears it
+    pub instagram_username: Option<Option<String>>,
+    /// `None` = dont change, `Some(None)` clears it
+    pub career: Option<Option<String>>,
+    /// `None` = dont change, `Some(None)` clears it
+    pub industry: Option<Option<String>>,
+    /// `None` = dont change, `Some(None)` clears it
+    pub profile: Option<Option<String>>,
 }
 
 #[derive(Clone)]
 pub enum OperationOutcome {
     Created(Member),
-    Updated { before: Member, after: Member },
+    Updated {
+        before: Box<Member>,
+        after: Box<Member>,
+    },
     Archived(Member),
     Unchanged(Member),
 }
@@ -65,6 +94,21 @@ impl UpdateMember {
         }
         if let Some(joined_at) = self.joined_at {
             after.joined_at = joined_at;
+        }
+        if let Some(linkedin_username) = self.linkedin_username {
+            after.linkedin_username = linkedin_username;
+        }
+        if let Some(instagram_username) = self.instagram_username {
+            after.instagram_username = instagram_username;
+        }
+        if let Some(career) = self.career {
+            after.career = career;
+        }
+        if let Some(industry) = self.industry {
+            after.industry = industry;
+        }
+        if let Some(profile) = self.profile {
+            after.profile = profile;
         }
 
         let discord_touched = self.discord_id.is_some() || self.discord_username.is_some();
@@ -105,6 +149,11 @@ impl UpsertWrite {
             joined_at: member.joined_at,
             discord_id: member.discord_id.map(Some),
             discord_username: member.discord_username.map(Some),
+            linkedin_username: member.linkedin_username.map(Some),
+            instagram_username: member.instagram_username.map(Some),
+            career: member.career.map(Some),
+            industry: member.industry.map(Some),
+            profile: member.profile.map(Some),
         })
     }
 }
@@ -122,6 +171,11 @@ mod tests {
             joined_at: DateTime::UNIX_EPOCH,
             discord_id: discord.map(|(id, _)| id.into()),
             discord_username: discord.map(|(_, name)| name.into()),
+            linkedin_username: None,
+            instagram_username: None,
+            career: None,
+            industry: None,
+            profile: None,
             updated_at: DateTime::UNIX_EPOCH,
             archived_at: None,
         }
@@ -135,6 +189,11 @@ mod tests {
             joined_at: None,
             discord_id: discord.map(|(id, _)| id.into()),
             discord_username: discord.map(|(_, name)| name.into()),
+            linkedin_username: None,
+            instagram_username: None,
+            career: None,
+            industry: None,
+            profile: None,
         }
     }
 
@@ -150,6 +209,11 @@ mod tests {
             joined_at: None,
             discord_id: discord_id.map(|v| v.map(str::to_owned)),
             discord_username: discord_username.map(|v| v.map(str::to_owned)),
+            linkedin_username: None,
+            instagram_username: None,
+            career: None,
+            industry: None,
+            profile: None,
         }
     }
 
@@ -234,6 +298,28 @@ mod tests {
     }
 
     #[test]
+    fn optional_fields_set_clear_or_keep_independently() {
+        let mut before = member(None);
+        before.linkedin_username = Some("old".into());
+        before.career = Some("Engineer".into());
+        before.profile = Some("notes".into());
+
+        let after = UpdateMember {
+            linkedin_username: Some(None),
+            instagram_username: Some(Some("insta".into())),
+            profile: Some(Some("new notes".into())),
+            ..update(None, None)
+        }
+        .apply(&before)
+        .unwrap();
+
+        assert_eq!(after.linkedin_username, None);
+        assert_eq!(after.instagram_username.as_deref(), Some("insta"));
+        assert_eq!(after.career.as_deref(), Some("Engineer"));
+        assert_eq!(after.profile.as_deref(), Some("new notes"));
+    }
+
+    #[test]
     fn upsert_creates_new_members_and_updates_existing_ones_by_id() {
         assert!(matches!(
             &UpsertWrite::new(create(None), None),
@@ -250,7 +336,25 @@ mod tests {
                 joined_at: None,
                 discord_id: None,
                 discord_username: None,
+                linkedin_username: None,
+                instagram_username: None,
+                career: None,
+                industry: None,
+                profile: None,
             }) if email == "a@example.org" && first_name == "First" && last_name == "Last"
+        ));
+
+        let with_career = CreateMember {
+            career: Some("Engineer".into()),
+            ..create(None)
+        };
+        assert!(matches!(
+            &UpsertWrite::new(with_career, Some(7)),
+            UpsertWrite::Update(UpdateMember {
+                career: Some(Some(career)),
+                profile: None,
+                ..
+            }) if career == "Engineer"
         ));
 
         assert!(matches!(

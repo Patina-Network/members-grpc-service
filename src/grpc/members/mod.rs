@@ -1,27 +1,57 @@
+pub mod admin;
+mod reader;
+
 use tonic::{Request, Response, Status};
 
 use crate::{
     db::members::MembersRepository,
-    domain::members::{Member as StoredMember, MemberIdentifier},
-    grpc::{
-        database_status, page::Page, timestamp, validate_discord_id, validate_email,
-        validate_member_id,
-    },
+    domain::members::AutocompleteField,
+    grpc::database_status,
     proto::members::{
-        GetMemberRequest, GetMemberResponse, ListMembersRequest, ListMembersResponse, Member,
-        get_member_request::Identifier, members_service_server,
+        GetMemberRequest, GetMemberResponse, ListCareersRequest, ListCareersResponse,
+        ListIndustriesRequest, ListIndustriesResponse, ListMembersRequest, ListMembersResponse,
+        Member, members_service_server,
     },
 };
+
+use reader::MembersReader;
+
+const DEFAULT_AUTOCOMPLETE_LIMIT: u32 = 10;
+const MAX_AUTOCOMPLETE_LIMIT: u32 = 50;
 
 pub use members_service_server::MembersServiceServer;
 
 pub struct MembersService<R> {
     repository: R,
+    reader: MembersReader<R, Member>,
 }
 
-impl<R> MembersService<R> {
-    pub fn new(repository: R) -> Self {
-        Self { repository }
+impl<R: MembersRepository> MembersService<R> {
+    pub fn new(repository: R) -> Self
+    where
+        R: Clone,
+    {
+        Self {
+            reader: MembersReader::new(repository.clone()),
+            repository,
+        }
+    }
+
+    async fn autocomplete(
+        &self,
+        field: AutocompleteField,
+        query: String,
+        limit: u32,
+    ) -> Result<Vec<String>, Status> {
+        let limit = match limit {
+            0 => DEFAULT_AUTOCOMPLETE_LIMIT,
+            limit => limit.min(MAX_AUTOCOMPLETE_LIMIT),
+        };
+
+        self.repository
+            .autocomplete(field, query, i64::from(limit))
+            .await
+            .map_err(database_status)
     }
 }
 
@@ -31,33 +61,10 @@ impl<R: MembersRepository> members_service_server::MembersService for MembersSer
         &self,
         request: Request<GetMemberRequest>,
     ) -> Result<Response<GetMemberResponse>, Status> {
-        let identifier = match request.into_inner().identifier {
-            Some(Identifier::MemberId(id)) => {
-                validate_member_id(id)?;
-                MemberIdentifier::Id(id)
-            }
-            Some(Identifier::Email(email)) => {
-                validate_email(&email)?;
-                MemberIdentifier::Email(email)
-            }
-            Some(Identifier::DiscordId(id)) => {
-                validate_discord_id(&id)?;
-                MemberIdentifier::DiscordId(id)
-            }
-            None => {
-                return Err(Status::invalid_argument("a member identifier is required"));
-            }
-        };
-
-        let member = self
-            .repository
-            .get(identifier)
-            .await
-            .map_err(database_status)?
-            .ok_or(Status::not_found("member not found"))?;
+        let member = self.reader.get(request.into_inner()).await?;
 
         Ok(GetMemberResponse {
-            member: Some(member.into()),
+            member: Some(member),
         }
         .into())
     }
@@ -66,42 +73,37 @@ impl<R: MembersRepository> members_service_server::MembersService for MembersSer
         &self,
         request: Request<ListMembersRequest>,
     ) -> Result<Response<ListMembersResponse>, Status> {
-        let request = request.into_inner();
-        let page = Page::new(
-            request.page_size,
-            &request.page_token,
-            if request.include_archived { "1" } else { "0" },
-        )?;
-
-        let members = self
-            .repository
-            .list(request.include_archived, page.after(), page.fetch_limit())
-            .await
-            .map_err(database_status)?;
-
-        let (members, next_page_token) = page.finish(members, |member| member.id);
+        let (members, next_page_token) = self.reader.list(request.into_inner()).await?;
 
         Ok(ListMembersResponse {
-            members: members.into_iter().map(Into::into).collect(),
+            members,
             next_page_token,
         }
         .into())
     }
-}
 
-impl From<StoredMember> for Member {
-    fn from(member: StoredMember) -> Self {
-        Self {
-            member_id: member.id,
-            email: member.email,
-            first_name: member.first_name,
-            last_name: member.last_name,
-            joined_at: Some(timestamp(member.joined_at)),
-            discord_id: member.discord_id,
-            discord_username: member.discord_username,
-            updated_at: Some(timestamp(member.updated_at)),
-            archived_at: member.archived_at.map(timestamp),
-        }
+    async fn list_careers(
+        &self,
+        request: Request<ListCareersRequest>,
+    ) -> Result<Response<ListCareersResponse>, Status> {
+        let request = request.into_inner();
+        let careers = self
+            .autocomplete(AutocompleteField::Career, request.query, request.limit)
+            .await?;
+
+        Ok(ListCareersResponse { careers }.into())
+    }
+
+    async fn list_industries(
+        &self,
+        request: Request<ListIndustriesRequest>,
+    ) -> Result<Response<ListIndustriesResponse>, Status> {
+        let request = request.into_inner();
+        let industries = self
+            .autocomplete(AutocompleteField::Industry, request.query, request.limit)
+            .await?;
+
+        Ok(ListIndustriesResponse { industries }.into())
     }
 }
 
@@ -110,7 +112,10 @@ mod tests {
     use chrono::DateTime;
     use tonic::Code;
 
-    use crate::db::members::fake::FakeMembersRepository;
+    use crate::{
+        db::members::fake::FakeMembersRepository, domain::members::Member as StoredMember,
+        proto::members::get_member_request::Identifier,
+    };
 
     use super::{members_service_server::MembersService as _, *};
 
@@ -255,6 +260,11 @@ mod tests {
             joined_at: DateTime::UNIX_EPOCH,
             discord_id: Some(id.to_string()),
             discord_username: Some(format!("member{id}")),
+            linkedin_username: None,
+            instagram_username: None,
+            career: None,
+            industry: None,
+            profile: Some("admin notes".into()),
             updated_at: DateTime::UNIX_EPOCH,
             archived_at: (id == 3).then_some(DateTime::UNIX_EPOCH),
         }

@@ -2,7 +2,7 @@ use chrono::Utc;
 use sqlx::PgPool;
 
 use crate::domain::members::{
-    CreateMember, Member, MemberIdentifier, OperationOutcome, UpdateMember,
+    AutocompleteField, CreateMember, Member, MemberIdentifier, OperationOutcome, UpdateMember,
 };
 
 pub trait MembersRepository: Send + Sync + 'static {
@@ -42,6 +42,13 @@ pub trait MembersRepository: Send + Sync + 'static {
         &self,
         member_id: i32,
     ) -> impl Future<Output = Result<OperationOutcome, sqlx::Error>> + Send;
+
+    fn autocomplete(
+        &self,
+        field: AutocompleteField,
+        query: String,
+        limit: i64,
+    ) -> impl Future<Output = Result<Vec<String>, sqlx::Error>> + Send;
 }
 
 #[derive(Clone)]
@@ -71,6 +78,11 @@ impl PgMembersRepository {
                 "joinedAt" AS joined_at,
                 "discordId" AS discord_id,
                 "discordUsername" AS discord_username,
+                "linkedinUsername" AS linkedin_username,
+                "instagramUsername" AS instagram_username,
+                career,
+                industry,
+                profile,
                 "updatedAt" AS updated_at,
                 "archivedAt" AS archived_at
             FROM
@@ -106,7 +118,12 @@ impl PgMembersRepository {
                 "joinedAt" = $5,
                 "discordId" = $6,
                 "discordUsername" = $7,
-                "updatedAt" = $8
+                "linkedinUsername" = $8,
+                "instagramUsername" = $9,
+                career = $10,
+                industry = $11,
+                profile = $12,
+                "updatedAt" = $13
             WHERE
                 id = $1
             RETURNING
@@ -117,6 +134,11 @@ impl PgMembersRepository {
                 "joinedAt" AS joined_at,
                 "discordId" AS discord_id,
                 "discordUsername" AS discord_username,
+                "linkedinUsername" AS linkedin_username,
+                "instagramUsername" AS instagram_username,
+                career,
+                industry,
+                profile,
                 "updatedAt" AS updated_at,
                 "archivedAt" AS archived_at
             "#,
@@ -127,6 +149,11 @@ impl PgMembersRepository {
             after.joined_at,
             after.discord_id,
             after.discord_username,
+            after.linkedin_username,
+            after.instagram_username,
+            after.career,
+            after.industry,
+            after.profile,
             Utc::now()
         )
         .fetch_one(&mut **tx)
@@ -159,6 +186,11 @@ impl PgMembersRepository {
                 "joinedAt" AS joined_at,
                 "discordId" AS discord_id,
                 "discordUsername" AS discord_username,
+                "linkedinUsername" AS linkedin_username,
+                "instagramUsername" AS instagram_username,
+                career,
+                industry,
+                profile,
                 "updatedAt" AS updated_at,
                 "archivedAt" AS archived_at
             "#,
@@ -180,6 +212,11 @@ impl PgMembersRepository {
                     "joinedAt" AS joined_at,
                     "discordId" AS discord_id,
                     "discordUsername" AS discord_username,
+                    "linkedinUsername" AS linkedin_username,
+                    "instagramUsername" AS instagram_username,
+                    career,
+                    industry,
+                    profile,
                     "updatedAt" AS updated_at,
                     "archivedAt" AS archived_at
                 FROM
@@ -214,6 +251,11 @@ impl MembersRepository for PgMembersRepository {
                         "joinedAt" AS joined_at,
                         "discordId" AS discord_id,
                         "discordUsername" AS discord_username,
+                        "linkedinUsername" AS linkedin_username,
+                        "instagramUsername" AS instagram_username,
+                        career,
+                        industry,
+                        profile,
                         "updatedAt" AS updated_at,
                         "archivedAt" AS archived_at
                     FROM
@@ -238,6 +280,11 @@ impl MembersRepository for PgMembersRepository {
                         "joinedAt" AS joined_at,
                         "discordId" AS discord_id,
                         "discordUsername" AS discord_username,
+                        "linkedinUsername" AS linkedin_username,
+                        "instagramUsername" AS instagram_username,
+                        career,
+                        industry,
+                        profile,
                         "updatedAt" AS updated_at,
                         "archivedAt" AS archived_at
                     FROM
@@ -262,6 +309,11 @@ impl MembersRepository for PgMembersRepository {
                         "joinedAt" AS joined_at,
                         "discordId" AS discord_id,
                         "discordUsername" AS discord_username,
+                        "linkedinUsername" AS linkedin_username,
+                        "instagramUsername" AS instagram_username,
+                        career,
+                        industry,
+                        profile,
                         "updatedAt" AS updated_at,
                         "archivedAt" AS archived_at
                     FROM
@@ -294,6 +346,11 @@ impl MembersRepository for PgMembersRepository {
                 "joinedAt" AS joined_at,
                 "discordId" AS discord_id,
                 "discordUsername" AS discord_username,
+                "linkedinUsername" AS linkedin_username,
+                "instagramUsername" AS instagram_username,
+                career,
+                industry,
+                profile,
                 "updatedAt" AS updated_at,
                 "archivedAt" AS archived_at
             FROM
@@ -321,9 +378,10 @@ impl MembersRepository for PgMembersRepository {
             Member,
             r#"
             INSERT INTO "Member"
-                (email, "firstName", "lastName", "joinedAt", "discordId", "discordUsername", "updatedAt")
+                (email, "firstName", "lastName", "joinedAt", "discordId", "discordUsername",
+                 "linkedinUsername", "instagramUsername", career, industry, profile, "updatedAt")
             VALUES
-                ($1, $2, $3, $4, $5, $6, $7)
+                ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             RETURNING
                 id,
                 email,
@@ -332,6 +390,11 @@ impl MembersRepository for PgMembersRepository {
                 "joinedAt" AS joined_at,
                 "discordId" AS discord_id,
                 "discordUsername" AS discord_username,
+                "linkedinUsername" AS linkedin_username,
+                "instagramUsername" AS instagram_username,
+                career,
+                industry,
+                profile,
                 "updatedAt" AS updated_at,
                 "archivedAt" AS archived_at
             "#,
@@ -341,6 +404,11 @@ impl MembersRepository for PgMembersRepository {
             input.joined_at.unwrap_or(now),
             input.discord_id,
             input.discord_username,
+            input.linkedin_username,
+            input.instagram_username,
+            input.career,
+            input.industry,
+            input.profile,
             now
         )
         .fetch_one(&self.pool)
@@ -375,6 +443,66 @@ impl MembersRepository for PgMembersRepository {
             OperationOutcome::Unchanged(member)
         })
     }
+
+    async fn autocomplete(
+        &self,
+        field: AutocompleteField,
+        query: String,
+        limit: i64,
+    ) -> Result<Vec<String>, sqlx::Error> {
+        let pattern = format!("%{query}%");
+
+        match field {
+            AutocompleteField::Career => {
+                sqlx::query_scalar!(
+                    r#"
+                    SELECT
+                        career AS "career!"
+                    FROM
+                        "Member"
+                    WHERE
+                        career IS NOT NULL
+                        AND career ILIKE $1
+                    GROUP BY
+                        career
+                    ORDER BY
+                        COUNT(*) DESC,
+                        career ASC
+                    LIMIT
+                        $2
+                    "#,
+                    pattern,
+                    limit
+                )
+                .fetch_all(&self.pool)
+                .await
+            }
+            AutocompleteField::Industry => {
+                sqlx::query_scalar!(
+                    r#"
+                    SELECT
+                        industry AS "industry!"
+                    FROM
+                        "Member"
+                    WHERE
+                        industry IS NOT NULL
+                        AND industry ILIKE $1
+                    GROUP BY
+                        industry
+                    ORDER BY
+                        COUNT(*) DESC,
+                        industry ASC
+                    LIMIT
+                        $2
+                    "#,
+                    pattern,
+                    limit
+                )
+                .fetch_all(&self.pool)
+                .await
+            }
+        }
+    }
 }
 
 struct UpdateResult {
@@ -387,8 +515,8 @@ impl UpdateResult {
     fn into_outcome(self) -> OperationOutcome {
         if self.changed {
             OperationOutcome::Updated {
-                before: self.before,
-                after: self.after,
+                before: Box::new(self.before),
+                after: Box::new(self.after),
             }
         } else {
             OperationOutcome::Unchanged(self.after)
@@ -398,6 +526,8 @@ impl UpdateResult {
 
 #[cfg(test)]
 pub mod fake {
+    use std::collections::BTreeMap;
+
     use chrono::DateTime;
 
     use super::*;
@@ -480,6 +610,11 @@ pub mod fake {
                     joined_at: input.joined_at.unwrap_or(DateTime::UNIX_EPOCH),
                     discord_id: input.discord_id,
                     discord_username: input.discord_username,
+                    linkedin_username: input.linkedin_username,
+                    instagram_username: input.instagram_username,
+                    career: input.career,
+                    industry: input.industry,
+                    profile: input.profile,
                     updated_at: DateTime::UNIX_EPOCH,
                     archived_at: None,
                 })
@@ -505,7 +640,10 @@ pub mod fake {
                 Ok(if after == before {
                     OperationOutcome::Unchanged(after)
                 } else {
-                    OperationOutcome::Updated { before, after }
+                    OperationOutcome::Updated {
+                        before: Box::new(before),
+                        after: Box::new(after),
+                    }
                 })
             })
             .await
@@ -524,6 +662,35 @@ pub mod fake {
                 } else {
                     OperationOutcome::Unchanged(member)
                 })
+            })
+            .await
+        }
+
+        async fn autocomplete(
+            &self,
+            field: AutocompleteField,
+            query: String,
+            limit: i64,
+        ) -> Result<Vec<String>, sqlx::Error> {
+            self.with(|members| {
+                let query = query.to_lowercase();
+                let mut counts = BTreeMap::<&str, usize>::new();
+                for value in members.iter().filter_map(|member| match field {
+                    AutocompleteField::Career => member.career.as_deref(),
+                    AutocompleteField::Industry => member.industry.as_deref(),
+                }) {
+                    if value.to_lowercase().contains(&query) {
+                        *counts.entry(value).or_default() += 1;
+                    }
+                }
+
+                let mut values: Vec<_> = counts.into_iter().collect();
+                values.sort_by(|(a, a_count), (b, b_count)| b_count.cmp(a_count).then(a.cmp(b)));
+                Ok(values
+                    .into_iter()
+                    .take(limit as usize)
+                    .map(|(value, _)| value.to_owned())
+                    .collect())
             })
             .await
         }

@@ -1,0 +1,27 @@
+meta {
+  name: updateMember
+  type: grpc
+  seq: 4
+}
+
+grpc {
+  url: localhost:50051
+  method: /members.admin.MembersAdminService/updateMember
+  body: grpc
+  protoPath: ../proto/v1/members_admin.proto
+  auth: none
+  methodType: unary
+}
+
+metadata {
+}
+
+body:grpc {
+  name: message 1
+  content: '''
+    {
+      "member_id": 1,
+      "first_name": "Bruno2"
+    }
+  '''
+}

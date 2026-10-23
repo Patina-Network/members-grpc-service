@@ -1,0 +1,28 @@
+meta {
+  name: createMember
+  type: grpc
+  seq: 3
+}
+
+grpc {
+  url: localhost:50051
+  method: /members.admin.MembersAdminService/createMember
+  body: grpc
+  protoPath: ../proto/v1/members_admin.proto
+  auth: none
+  methodType: unary
+}
+
+metadata {
+}
+
+body:grpc {
+  name: message 1
+  content: '''
+    {
+      "email": "brunotest@example.com",
+      "first_name": "Bruno",
+      "last_name": "Test"
+    }
+  '''
+}

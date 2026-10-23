@@ -1,228 +1,57 @@
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use sqlx::PgPool;
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct Member {
-    pub id: i32,
-    pub email: String,
-    pub first_name: String,
-    pub last_name: String,
-    pub joined_at: DateTime<Utc>,
-    pub discord_id: Option<String>,
-    pub discord_username: Option<String>,
-    pub updated_at: DateTime<Utc>,
-    pub archived_at: Option<DateTime<Utc>>,
-}
+use crate::domain::members::{
+    CreateMember, Member, MemberIdentifier, OperationOutcome, UpdateMember,
+};
 
-pub enum MemberIdentifier {
-    Id(i32),
-    Email(String),
-    DiscordId(String),
-}
+pub trait MembersRepository: Send + Sync + 'static {
+    fn get(
+        &self,
+        identifier: MemberIdentifier,
+    ) -> impl Future<Output = Result<Option<Member>, sqlx::Error>> + Send;
 
-pub struct CreateMember {
-    pub email: String,
-    pub first_name: String,
-    pub last_name: String,
-    pub joined_at: Option<DateTime<Utc>>,
-    pub discord_id: Option<String>,
-    pub discord_username: Option<String>,
-}
-
-pub struct UpdateMember {
-    pub member_id: i32,
-    pub email: Option<String>,
-    pub first_name: Option<String>,
-    pub last_name: Option<String>,
-    pub joined_at: Option<DateTime<Utc>>,
-    /// `None` = dont change, `Some(None)` clears it
-    pub discord_id: Option<Option<String>>,
-    /// `None` = dont change, `Some(None)` clears it
-    pub discord_username: Option<Option<String>>,
-}
-
-#[derive(Clone)]
-pub enum OperationOutcome {
-    Created(Member),
-    Updated { before: Member, after: Member },
-    Archived(Member),
-    Unchanged(Member),
-}
-
-#[derive(Clone)]
-pub struct MembersRepository {
-    pool: PgPool,
-}
-
-impl MembersRepository {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
-    }
-
-    pub async fn get(&self, identifier: MemberIdentifier) -> Result<Option<Member>, sqlx::Error> {
-        match identifier {
-            MemberIdentifier::Id(id) => {
-                sqlx::query_as!(
-                    Member,
-                    r#"
-                    SELECT
-                        id,
-                        email,
-                        "firstName" AS first_name,
-                        "lastName" AS last_name,
-                        "joinedAt" AS joined_at,
-                        "discordId" AS discord_id,
-                        "discordUsername" AS discord_username,
-                        "updatedAt" AS updated_at,
-                        "archivedAt" AS archived_at
-                    FROM
-                        "Member"
-                    WHERE
-                        id = $1
-                    "#,
-                    id
-                )
-                .fetch_optional(&self.pool)
-                .await
-            }
-            MemberIdentifier::Email(email) => {
-                sqlx::query_as!(
-                    Member,
-                    r#"
-                    SELECT
-                        id,
-                        email,
-                        "firstName" AS first_name,
-                        "lastName" AS last_name,
-                        "joinedAt" AS joined_at,
-                        "discordId" AS discord_id,
-                        "discordUsername" AS discord_username,
-                        "updatedAt" AS updated_at,
-                        "archivedAt" AS archived_at
-                    FROM
-                        "Member"
-                    WHERE
-                        email = $1
-                    "#,
-                    email
-                )
-                .fetch_optional(&self.pool)
-                .await
-            }
-            MemberIdentifier::DiscordId(id) => {
-                sqlx::query_as!(
-                    Member,
-                    r#"
-                    SELECT
-                        id,
-                        email,
-                        "firstName" AS first_name,
-                        "lastName" AS last_name,
-                        "joinedAt" AS joined_at,
-                        "discordId" AS discord_id,
-                        "discordUsername" AS discord_username,
-                        "updatedAt" AS updated_at,
-                        "archivedAt" AS archived_at
-                    FROM
-                        "Member"
-                    WHERE
-                        "discordId" = $1
-                    "#,
-                    id
-                )
-                .fetch_optional(&self.pool)
-                .await
-            }
-        }
-    }
-
-    pub async fn list(
+    fn list(
         &self,
         include_archived: bool,
         after: Option<i32>,
         limit: i64,
-    ) -> Result<Vec<Member>, sqlx::Error> {
-        sqlx::query_as!(
-            Member,
-            r#"
-            SELECT
-                id,
-                email,
-                "firstName" AS first_name,
-                "lastName" AS last_name,
-                "joinedAt" AS joined_at,
-                "discordId" AS discord_id,
-                "discordUsername" AS discord_username,
-                "updatedAt" AS updated_at,
-                "archivedAt" AS archived_at
-            FROM
-                "Member"
-            WHERE
-                ($1 OR "archivedAt" IS NULL)
-                AND ($2::integer IS NULL OR id > $2)
-            ORDER BY
-                id ASC
-            LIMIT
-                $3
-            "#,
-            include_archived,
-            after,
-            limit
-        )
-        .fetch_all(&self.pool)
-        .await
-    }
+    ) -> impl Future<Output = Result<Vec<Member>, sqlx::Error>> + Send;
 
-    pub async fn create_member(&self, input: CreateMember) -> Result<Member, sqlx::Error> {
-        let now = Utc::now();
+    fn create_member(
+        &self,
+        input: CreateMember,
+    ) -> impl Future<Output = Result<Member, sqlx::Error>> + Send;
 
-        sqlx::query_as!(
-            Member,
-            r#"
-            INSERT INTO "Member"
-                (email, "firstName", "lastName", "joinedAt", "discordId", "discordUsername", "updatedAt")
-            VALUES
-                ($1, $2, $3, $4, $5, $6, $7)
-            RETURNING
-                id,
-                email,
-                "firstName" AS first_name,
-                "lastName" AS last_name,
-                "joinedAt" AS joined_at,
-                "discordId" AS discord_id,
-                "discordUsername" AS discord_username,
-                "updatedAt" AS updated_at,
-                "archivedAt" AS archived_at
-            "#,
-            input.email,
-            input.first_name,
-            input.last_name,
-            input.joined_at.unwrap_or(now),
-            input.discord_id,
-            input.discord_username,
-            now
-        )
-        .fetch_one(&self.pool)
-        .await
-    }
-
-    pub async fn update_member(&self, input: UpdateMember) -> Result<Member, sqlx::Error> {
-        let mut tx = self.pool.begin().await?;
-        let result = self.update_in_transaction(&mut tx, input, false).await?;
-        tx.commit().await?;
-
-        Ok(result.after)
-    }
-
-    pub async fn update_operation(
+    fn update_member(
         &self,
         input: UpdateMember,
-    ) -> Result<OperationOutcome, sqlx::Error> {
-        let mut tx = self.pool.begin().await?;
-        let result = self.update_in_transaction(&mut tx, input, true).await?;
-        tx.commit().await?;
+    ) -> impl Future<Output = Result<Member, sqlx::Error>> + Send;
 
-        Ok(result.into_outcome())
+    fn update_operation(
+        &self,
+        input: UpdateMember,
+    ) -> impl Future<Output = Result<OperationOutcome, sqlx::Error>> + Send;
+
+    fn archive_member(
+        &self,
+        member_id: i32,
+    ) -> impl Future<Output = Result<Member, sqlx::Error>> + Send;
+
+    fn archive_operation(
+        &self,
+        member_id: i32,
+    ) -> impl Future<Output = Result<OperationOutcome, sqlx::Error>> + Send;
+}
+
+#[derive(Clone)]
+pub struct PgMembersRepository {
+    pool: PgPool,
+}
+
+impl PgMembersRepository {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
     }
 
     async fn update_in_transaction(
@@ -310,19 +139,6 @@ impl MembersRepository {
         })
     }
 
-    pub async fn archive_member(&self, member_id: i32) -> Result<Member, sqlx::Error> {
-        Ok(self.archive(member_id).await?.0)
-    }
-
-    pub async fn archive_operation(&self, member_id: i32) -> Result<OperationOutcome, sqlx::Error> {
-        let (member, changed) = self.archive(member_id).await?;
-        Ok(if changed {
-            OperationOutcome::Archived(member)
-        } else {
-            OperationOutcome::Unchanged(member)
-        })
-    }
-
     async fn archive(&self, member_id: i32) -> Result<(Member, bool), sqlx::Error> {
         let updated = sqlx::query_as!(
             Member,
@@ -383,6 +199,184 @@ impl MembersRepository {
     }
 }
 
+impl MembersRepository for PgMembersRepository {
+    async fn get(&self, identifier: MemberIdentifier) -> Result<Option<Member>, sqlx::Error> {
+        match identifier {
+            MemberIdentifier::Id(id) => {
+                sqlx::query_as!(
+                    Member,
+                    r#"
+                    SELECT
+                        id,
+                        email,
+                        "firstName" AS first_name,
+                        "lastName" AS last_name,
+                        "joinedAt" AS joined_at,
+                        "discordId" AS discord_id,
+                        "discordUsername" AS discord_username,
+                        "updatedAt" AS updated_at,
+                        "archivedAt" AS archived_at
+                    FROM
+                        "Member"
+                    WHERE
+                        id = $1
+                    "#,
+                    id
+                )
+                .fetch_optional(&self.pool)
+                .await
+            }
+            MemberIdentifier::Email(email) => {
+                sqlx::query_as!(
+                    Member,
+                    r#"
+                    SELECT
+                        id,
+                        email,
+                        "firstName" AS first_name,
+                        "lastName" AS last_name,
+                        "joinedAt" AS joined_at,
+                        "discordId" AS discord_id,
+                        "discordUsername" AS discord_username,
+                        "updatedAt" AS updated_at,
+                        "archivedAt" AS archived_at
+                    FROM
+                        "Member"
+                    WHERE
+                        email = $1
+                    "#,
+                    email
+                )
+                .fetch_optional(&self.pool)
+                .await
+            }
+            MemberIdentifier::DiscordId(id) => {
+                sqlx::query_as!(
+                    Member,
+                    r#"
+                    SELECT
+                        id,
+                        email,
+                        "firstName" AS first_name,
+                        "lastName" AS last_name,
+                        "joinedAt" AS joined_at,
+                        "discordId" AS discord_id,
+                        "discordUsername" AS discord_username,
+                        "updatedAt" AS updated_at,
+                        "archivedAt" AS archived_at
+                    FROM
+                        "Member"
+                    WHERE
+                        "discordId" = $1
+                    "#,
+                    id
+                )
+                .fetch_optional(&self.pool)
+                .await
+            }
+        }
+    }
+
+    async fn list(
+        &self,
+        include_archived: bool,
+        after: Option<i32>,
+        limit: i64,
+    ) -> Result<Vec<Member>, sqlx::Error> {
+        sqlx::query_as!(
+            Member,
+            r#"
+            SELECT
+                id,
+                email,
+                "firstName" AS first_name,
+                "lastName" AS last_name,
+                "joinedAt" AS joined_at,
+                "discordId" AS discord_id,
+                "discordUsername" AS discord_username,
+                "updatedAt" AS updated_at,
+                "archivedAt" AS archived_at
+            FROM
+                "Member"
+            WHERE
+                ($1 OR "archivedAt" IS NULL)
+                AND ($2::integer IS NULL OR id > $2)
+            ORDER BY
+                id ASC
+            LIMIT
+                $3
+            "#,
+            include_archived,
+            after,
+            limit
+        )
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    async fn create_member(&self, input: CreateMember) -> Result<Member, sqlx::Error> {
+        let now = Utc::now();
+
+        sqlx::query_as!(
+            Member,
+            r#"
+            INSERT INTO "Member"
+                (email, "firstName", "lastName", "joinedAt", "discordId", "discordUsername", "updatedAt")
+            VALUES
+                ($1, $2, $3, $4, $5, $6, $7)
+            RETURNING
+                id,
+                email,
+                "firstName" AS first_name,
+                "lastName" AS last_name,
+                "joinedAt" AS joined_at,
+                "discordId" AS discord_id,
+                "discordUsername" AS discord_username,
+                "updatedAt" AS updated_at,
+                "archivedAt" AS archived_at
+            "#,
+            input.email,
+            input.first_name,
+            input.last_name,
+            input.joined_at.unwrap_or(now),
+            input.discord_id,
+            input.discord_username,
+            now
+        )
+        .fetch_one(&self.pool)
+        .await
+    }
+
+    async fn update_member(&self, input: UpdateMember) -> Result<Member, sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        let result = self.update_in_transaction(&mut tx, input, false).await?;
+        tx.commit().await?;
+
+        Ok(result.after)
+    }
+
+    async fn update_operation(&self, input: UpdateMember) -> Result<OperationOutcome, sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        let result = self.update_in_transaction(&mut tx, input, true).await?;
+        tx.commit().await?;
+
+        Ok(result.into_outcome())
+    }
+
+    async fn archive_member(&self, member_id: i32) -> Result<Member, sqlx::Error> {
+        Ok(self.archive(member_id).await?.0)
+    }
+
+    async fn archive_operation(&self, member_id: i32) -> Result<OperationOutcome, sqlx::Error> {
+        let (member, changed) = self.archive(member_id).await?;
+        Ok(if changed {
+            OperationOutcome::Archived(member)
+        } else {
+            OperationOutcome::Unchanged(member)
+        })
+    }
+}
+
 struct UpdateResult {
     before: Member,
     after: Member,
@@ -402,132 +396,136 @@ impl UpdateResult {
     }
 }
 
-impl UpdateMember {
-    /// Merges into `before`. Discord is checked only when touched, so a row with
-    /// one half already set still accepts other edits.
-    fn apply(self, before: &Member) -> Result<Member, sqlx::Error> {
-        let mut after = before.clone();
-        if let Some(email) = self.email {
-            after.email = email;
-        }
-        if let Some(first_name) = self.first_name {
-            after.first_name = first_name;
-        }
-        if let Some(last_name) = self.last_name {
-            after.last_name = last_name;
-        }
-        if let Some(joined_at) = self.joined_at {
-            after.joined_at = joined_at;
-        }
-
-        let discord_touched = self.discord_id.is_some() || self.discord_username.is_some();
-        if let Some(discord_id) = self.discord_id {
-            after.discord_id = discord_id;
-        }
-        if let Some(discord_username) = self.discord_username {
-            after.discord_username = discord_username;
-        }
-        if discord_touched && after.discord_id.is_some() != after.discord_username.is_some() {
-            return Err(sqlx::Error::InvalidArgument(
-                "discord_id and discord_username must be set or cleared together".into(),
-            ));
-        }
-
-        Ok(after)
-    }
-}
-
 #[cfg(test)]
-mod tests {
+pub mod fake {
+    use chrono::DateTime;
+
     use super::*;
 
-    fn member(discord: Option<(&str, &str)>) -> Member {
-        Member {
-            id: 1,
-            email: "a@example.org".into(),
-            first_name: "First".into(),
-            last_name: "Last".into(),
-            joined_at: DateTime::UNIX_EPOCH,
-            discord_id: discord.map(|(id, _)| id.into()),
-            discord_username: discord.map(|(_, name)| name.into()),
-            updated_at: DateTime::UNIX_EPOCH,
-            archived_at: None,
+    #[derive(Clone)]
+    pub enum FakeMembersRepository {
+        Unavailable,
+        Hang,
+        Stored(Vec<Member>),
+    }
+
+    impl FakeMembersRepository {
+        async fn with<T>(
+            &self,
+            f: impl FnOnce(&[Member]) -> Result<T, sqlx::Error>,
+        ) -> Result<T, sqlx::Error> {
+            match self {
+                Self::Unavailable => Err(sqlx::Error::PoolClosed),
+                Self::Hang => std::future::pending().await,
+                Self::Stored(members) => f(members),
+            }
         }
     }
 
-    fn update(
-        discord_id: Option<Option<&str>>,
-        discord_username: Option<Option<&str>>,
-    ) -> UpdateMember {
-        UpdateMember {
-            member_id: 1,
-            email: None,
-            first_name: None,
-            last_name: None,
-            joined_at: None,
-            discord_id: discord_id.map(|v| v.map(str::to_owned)),
-            discord_username: discord_username.map(|v| v.map(str::to_owned)),
-        }
+    fn find(members: &[Member], id: i32) -> Result<Member, sqlx::Error> {
+        members
+            .iter()
+            .find(|member| member.id == id)
+            .cloned()
+            .ok_or(sqlx::Error::RowNotFound)
     }
 
-    fn discord(member: &Member) -> (Option<&str>, Option<&str>) {
-        (
-            member.discord_id.as_deref(),
-            member.discord_username.as_deref(),
-        )
+    fn archive(members: &[Member], id: i32) -> Result<(Member, bool), sqlx::Error> {
+        let mut member = find(members, id)?;
+        let changed = member.archived_at.is_none();
+        member.archived_at.get_or_insert(DateTime::UNIX_EPOCH);
+        Ok((member, changed))
     }
 
-    #[test]
-    fn discord_id_and_username_change_together() {
-        let linked = member(Some(("1", "name")));
-        let unlinked = member(None);
-
-        for (before, input, expected) in [
-            (&linked, update(Some(None), Some(None)), (None, None)),
-            (
-                &linked,
-                update(Some(Some("2")), None),
-                (Some("2"), Some("name")),
-            ),
-            (
-                &linked,
-                update(None, Some(Some("new"))),
-                (Some("1"), Some("new")),
-            ),
-            (
-                &unlinked,
-                update(Some(Some("2")), Some(Some("n"))),
-                (Some("2"), Some("n")),
-            ),
-        ] {
-            assert_eq!(discord(&input.apply(before).unwrap()), expected);
+    impl MembersRepository for FakeMembersRepository {
+        async fn get(&self, identifier: MemberIdentifier) -> Result<Option<Member>, sqlx::Error> {
+            self.with(|members| {
+                Ok(members
+                    .iter()
+                    .find(|member| match &identifier {
+                        MemberIdentifier::Id(id) => member.id == *id,
+                        MemberIdentifier::Email(email) => &member.email == email,
+                        MemberIdentifier::DiscordId(id) => member.discord_id.as_ref() == Some(id),
+                    })
+                    .cloned())
+            })
+            .await
         }
 
-        for (before, input) in [
-            (&linked, update(Some(None), None)),
-            (&linked, update(None, Some(None))),
-            (&linked, update(Some(None), Some(Some("still-here")))),
-            (&unlinked, update(None, Some(Some("orphan")))),
-            (&unlinked, update(Some(Some("2")), None)),
-        ] {
-            let error = input.apply(before).unwrap_err();
-            assert!(matches!(error, sqlx::Error::InvalidArgument(_)), "{error}");
+        async fn list(
+            &self,
+            include_archived: bool,
+            after: Option<i32>,
+            limit: i64,
+        ) -> Result<Vec<Member>, sqlx::Error> {
+            self.with(|members| {
+                Ok(members
+                    .iter()
+                    .filter(|member| include_archived || member.archived_at.is_none())
+                    .filter(|member| after.is_none_or(|after| member.id > after))
+                    .take(limit as usize)
+                    .cloned()
+                    .collect())
+            })
+            .await
         }
-    }
 
-    #[test]
-    fn untouched_discord_does_not_block_other_edits_on_half_set_rows() {
-        let mut half_set = member(Some(("1", "name")));
-        half_set.discord_username = None;
-
-        let after = UpdateMember {
-            first_name: Some("New".into()),
-            ..update(None, None)
+        async fn create_member(&self, input: CreateMember) -> Result<Member, sqlx::Error> {
+            self.with(|members| {
+                Ok(Member {
+                    id: members.len() as i32 + 1,
+                    email: input.email,
+                    first_name: input.first_name,
+                    last_name: input.last_name,
+                    joined_at: input.joined_at.unwrap_or(DateTime::UNIX_EPOCH),
+                    discord_id: input.discord_id,
+                    discord_username: input.discord_username,
+                    updated_at: DateTime::UNIX_EPOCH,
+                    archived_at: None,
+                })
+            })
+            .await
         }
-        .apply(&half_set)
-        .unwrap();
 
-        assert_eq!(after.first_name, "New");
-        assert_eq!(discord(&after), (Some("1"), None));
+        async fn update_member(&self, input: UpdateMember) -> Result<Member, sqlx::Error> {
+            self.with(|members| {
+                let before = find(members, input.member_id)?;
+                input.apply(&before)
+            })
+            .await
+        }
+
+        async fn update_operation(
+            &self,
+            input: UpdateMember,
+        ) -> Result<OperationOutcome, sqlx::Error> {
+            self.with(|members| {
+                let before = find(members, input.member_id)?;
+                let after = input.apply(&before)?;
+                Ok(if after == before {
+                    OperationOutcome::Unchanged(after)
+                } else {
+                    OperationOutcome::Updated { before, after }
+                })
+            })
+            .await
+        }
+
+        async fn archive_member(&self, member_id: i32) -> Result<Member, sqlx::Error> {
+            self.with(|members| archive(members, member_id).map(|(member, _)| member))
+                .await
+        }
+
+        async fn archive_operation(&self, member_id: i32) -> Result<OperationOutcome, sqlx::Error> {
+            self.with(|members| {
+                let (member, changed) = archive(members, member_id)?;
+                Ok(if changed {
+                    OperationOutcome::Archived(member)
+                } else {
+                    OperationOutcome::Unchanged(member)
+                })
+            })
+            .await
+        }
     }
 }

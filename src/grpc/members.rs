@@ -1,7 +1,8 @@
 use tonic::{Request, Response, Status};
 
 use crate::{
-    db::members::{Member as StoredMember, MemberIdentifier, MembersRepository},
+    db::members::MembersRepository,
+    domain::members::{Member as StoredMember, MemberIdentifier},
     grpc::{
         database_status, page::Page, timestamp, validate_discord_id, validate_email,
         validate_member_id,
@@ -14,18 +15,18 @@ use crate::{
 
 pub use members_service_server::MembersServiceServer;
 
-pub struct MembersService {
-    repository: MembersRepository,
+pub struct MembersService<R> {
+    repository: R,
 }
 
-impl MembersService {
-    pub fn new(repository: MembersRepository) -> Self {
+impl<R> MembersService<R> {
+    pub fn new(repository: R) -> Self {
         Self { repository }
     }
 }
 
 #[tonic::async_trait]
-impl members_service_server::MembersService for MembersService {
+impl<R: MembersRepository> members_service_server::MembersService for MembersService<R> {
     async fn get_member(
         &self,
         request: Request<GetMemberRequest>,
@@ -106,114 +107,20 @@ impl From<StoredMember> for Member {
 
 #[cfg(test)]
 mod tests {
-    use sqlx::postgres::PgPoolOptions;
+    use chrono::DateTime;
     use tonic::Code;
+
+    use crate::db::members::fake::FakeMembersRepository;
 
     use super::{members_service_server::MembersService as _, *};
 
-    async fn disconnected_service() -> MembersService {
-        let pool = PgPoolOptions::new()
-            .connect_lazy("postgres://localhost/unused")
-            .unwrap();
-        pool.close().await;
-        MembersService::new(MembersRepository::new(pool))
-    }
-
-    #[tokio::test]
-    async fn integer_ids_and_pagination_against_postgres() {
-        let Ok(url) = std::env::var("TEST_DATABASE_URL") else {
-            return;
-        };
-
-        let pool = PgPoolOptions::new()
-            .max_connections(1)
-            .connect(&url)
-            .await
-            .unwrap();
-
-        sqlx::query(r#"CREATE TEMP TABLE "Member" (LIKE public."Member" INCLUDING ALL)"#)
-            .execute(&pool)
-            .await
-            .unwrap();
-
-        sqlx::query(
-            r#"
-            INSERT INTO "Member"
-                (email, "firstName", "lastName", "joinedAt", "updatedAt", "discordId", "archivedAt")
-            SELECT
-                'test' || n || '@example.com', 'Test', 'Member', NOW(), NOW(),
-                n::text, CASE WHEN n = 12 THEN NOW() END
-            FROM
-                generate_series(1, 12) AS n
-            "#,
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        let service = MembersService::new(MembersRepository::new(pool.clone()));
-
-        for identifier in [
-            Identifier::MemberId(10),
-            Identifier::Email("test10@example.com".into()),
-            Identifier::DiscordId("10".into()),
-        ] {
-            let member = service
-                .get_member(Request::new(GetMemberRequest {
-                    identifier: Some(identifier),
-                }))
-                .await
-                .unwrap()
-                .into_inner()
-                .member
-                .unwrap();
-            assert_eq!(member.member_id, 10);
-        }
-
-        for include_archived in [false, true] {
-            let mut token = String::new();
-            let mut ids = Vec::new();
-
-            loop {
-                let response = service
-                    .list_members(Request::new(ListMembersRequest {
-                        include_archived,
-                        page_size: 5,
-                        page_token: token,
-                    }))
-                    .await
-                    .unwrap()
-                    .into_inner();
-                ids.extend(response.members.iter().map(|member| member.member_id));
-                token = response.next_page_token;
-
-                if token.is_empty() {
-                    break;
-                }
-
-                assert!(ids.len() < 12);
-            }
-
-            assert_eq!(
-                ids,
-                (1..=if include_archived { 12 } else { 11 }).collect::<Vec<_>>()
-            );
-        }
-
-        let error = service
-            .get_member(Request::new(GetMemberRequest {
-                identifier: Some(Identifier::MemberId(100)),
-            }))
-            .await
-            .unwrap_err();
-        assert_eq!(error.code(), Code::NotFound);
-
-        pool.close().await;
+    fn disconnected_service() -> MembersService<FakeMembersRepository> {
+        MembersService::new(FakeMembersRepository::Unavailable)
     }
 
     #[tokio::test]
     async fn rejects_invalid_requests_before_querying() {
-        let service = disconnected_service().await;
+        let service = disconnected_service();
 
         for identifier in [
             None,
@@ -270,7 +177,7 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_identifiers_report_the_field_and_reason() {
-        let service = disconnected_service().await;
+        let service = disconnected_service();
 
         for (identifier, message) in [
             (None, "a member identifier is required"),
@@ -298,7 +205,7 @@ mod tests {
 
     #[tokio::test]
     async fn database_errors_return_sanitized_statuses() {
-        let service = disconnected_service().await;
+        let service = disconnected_service();
 
         let error = service
             .get_member(Request::new(GetMemberRequest {
@@ -322,7 +229,7 @@ mod tests {
 
     #[tokio::test]
     async fn valid_identifiers_reach_the_repository() {
-        let service = disconnected_service().await;
+        let service = disconnected_service();
 
         for identifier in [
             Identifier::MemberId(1),
@@ -336,6 +243,82 @@ mod tests {
                 .await
                 .unwrap_err();
             assert_eq!(error.code(), Code::Unavailable);
+        }
+    }
+
+    fn stored(id: i32) -> StoredMember {
+        StoredMember {
+            id,
+            email: format!("m{id}@example.org"),
+            first_name: "First".into(),
+            last_name: "Last".into(),
+            joined_at: DateTime::UNIX_EPOCH,
+            discord_id: Some(id.to_string()),
+            discord_username: Some(format!("member{id}")),
+            updated_at: DateTime::UNIX_EPOCH,
+            archived_at: (id == 3).then_some(DateTime::UNIX_EPOCH),
+        }
+    }
+
+    #[tokio::test]
+    async fn stored_members_are_found_and_paged() {
+        let service =
+            MembersService::new(FakeMembersRepository::Stored((1..=3).map(stored).collect()));
+
+        for identifier in [
+            Identifier::MemberId(2),
+            Identifier::Email("m2@example.org".into()),
+            Identifier::DiscordId("2".into()),
+        ] {
+            let member = service
+                .get_member(Request::new(GetMemberRequest {
+                    identifier: Some(identifier),
+                }))
+                .await
+                .unwrap()
+                .into_inner()
+                .member
+                .unwrap();
+
+            assert_eq!(member.member_id, 2);
+            assert_eq!(member.discord_username.as_deref(), Some("member2"));
+            assert_eq!(member.joined_at, Some(prost_types::Timestamp::default()));
+            assert_eq!(member.archived_at, None);
+        }
+
+        let error = service
+            .get_member(Request::new(GetMemberRequest {
+                identifier: Some(Identifier::MemberId(9)),
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Code::NotFound);
+        assert_eq!(error.message(), "member not found");
+
+        for (include_archived, expected) in [(false, vec![1, 2]), (true, vec![1, 2, 3])] {
+            let mut ids = Vec::new();
+            let mut page_token = String::new();
+
+            loop {
+                let page = service
+                    .list_members(Request::new(ListMembersRequest {
+                        include_archived,
+                        page_size: 1,
+                        page_token,
+                    }))
+                    .await
+                    .unwrap()
+                    .into_inner();
+
+                ids.extend(page.members.iter().map(|member| member.member_id));
+                page_token = page.next_page_token;
+
+                if page_token.is_empty() {
+                    break;
+                }
+            }
+
+            assert_eq!(ids, expected);
         }
     }
 }

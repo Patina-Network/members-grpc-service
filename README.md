@@ -38,6 +38,21 @@ cargo run # runs http on :3000, grpc on :50051
 
 `example.env` enables reflection and the core admin service for local development.
 
+## Code layout
+
+Each feature has one file per layer, all with the same name. `members` is the reference case:
+
+| File | Holds | May import |
+|---|---|---|
+| `src/domain/members.rs` | Structs (`Member`, `CreateMember`, `UpdateMember`) and the rules on them (`UpdateMember::apply`, `UpsertWrite::new`). No I/O. | Nothing from `db` or `grpc` |
+| `src/db/members.rs` | The `MembersRepository` trait, `PgMembersRepository` (runs the SQL and returns `domain` structs), and `FakeMembersRepository` for tests. | `domain` |
+| `src/grpc/members.rs`, `src/grpc/members_admin.rs` | gRPC handlers, generic over `R: MembersRepository`, and conversions between proto messages and `domain` structs. | `domain`, `db` |
+
+- New business rules go in `domain/` as plain functions so they can be unit tested without a database or server.
+- Structs that only the repository uses (e.g. `UpdateResult`) stay private in `db/`.
+- Handlers never take a concrete repository. Every service is generic over its repository trait (`MembersService<R: MembersRepository>`); `main.rs` passes the `Pg*` implementation and tests pass the `Fake*` one, so handler success paths are covered without Postgres. New features follow the same trait + `Pg*` + `Fake*` pattern.
+- Tests are unit tests only: no test may need a database or `.env`. Code that talks to Postgres is kept free of logic instead of being tested against one.
+
 ## Database development
 
 Copy `example.env` to `.env` and set your local PostgreSQL credentials. Local

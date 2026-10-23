@@ -8,7 +8,7 @@ use tracing::info;
 
 use members_grpc_service::{
     config::Config,
-    db::{client::connect, health_check::HealthCheckRepository, members::MembersRepository},
+    db::{client::connect, health_check::HealthCheckRepository, members::PgMembersRepository},
     grpc::members::{MembersService, MembersServiceServer},
     grpc::members_admin::{MembersAdminService, MembersAdminServiceServer},
     grpc::metrics::GrpcRequestMetricsMiddleware,
@@ -51,19 +51,19 @@ async fn main() -> anyhow::Result<()> {
     config.log();
 
     let db = connect(&config).await?;
-    let members_service = MembersService::new(MembersRepository::new(db.clone()));
+    let members_service = MembersService::new(PgMembersRepository::new(db.clone()));
 
     let grpc_addr = format!("0.0.0.0:{}", config.grpc_port).parse()?;
     let http_addr = format!("0.0.0.0:{}", config.http_port);
 
     let (grpc_health_reporter, grpc_health_svc) = tonic_health::server::health_reporter();
     grpc_health_reporter
-        .set_serving::<MembersServiceServer<MembersService>>()
+        .set_serving::<MembersServiceServer<MembersService<PgMembersRepository>>>()
         .await;
 
     if config.enable_core_admin_service {
         grpc_health_reporter
-            .set_serving::<MembersAdminServiceServer<MembersAdminService>>()
+            .set_serving::<MembersAdminServiceServer<MembersAdminService<PgMembersRepository>>>()
             .await;
     }
 
@@ -111,7 +111,7 @@ async fn main() -> anyhow::Result<()> {
     info!(addr = %grpc_addr, "starting grpc server");
     let admin_service = config.enable_core_admin_service.then(|| {
         MembersAdminServiceServer::new(MembersAdminService::new(
-            MembersRepository::new(db.clone()),
+            PgMembersRepository::new(db.clone()),
             config.max_bulk_operations,
             config.bulk_operation_timeout,
         ))

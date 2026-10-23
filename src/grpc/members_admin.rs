@@ -5,8 +5,9 @@ use prost_types::Timestamp;
 use tonic::{Request, Response, Status};
 
 use crate::{
-    db::members::{
-        CreateMember, MemberIdentifier, MembersRepository, OperationOutcome, UpdateMember,
+    db::members::MembersRepository,
+    domain::members::{
+        CreateMember, MemberIdentifier, OperationOutcome, UpdateMember, UpsertWrite,
     },
     grpc::{
         database_status, parse_timestamp, validate_discord_id, validate_email, validate_member_id,
@@ -23,18 +24,14 @@ use crate::{
 
 pub use members_admin_service_server::MembersAdminServiceServer;
 
-pub struct MembersAdminService {
-    repository: MembersRepository,
+pub struct MembersAdminService<R> {
+    repository: R,
     max_bulk_operations: usize,
     operation_timeout: Duration,
 }
 
-impl MembersAdminService {
-    pub fn new(
-        repository: MembersRepository,
-        max_bulk_operations: usize,
-        operation_timeout: Duration,
-    ) -> Self {
+impl<R: MembersRepository> MembersAdminService<R> {
+    pub fn new(repository: R, max_bulk_operations: usize, operation_timeout: Duration) -> Self {
         Self {
             repository,
             max_bulk_operations,
@@ -74,34 +71,23 @@ impl MembersAdminService {
                         .ok_or_else(|| Status::invalid_argument("upsert member is required"))?,
                 )?;
 
-                let existing_member = self
+                let existing_id = self
                     .repository
                     .get(MemberIdentifier::Email(member.email.clone()))
                     .await
-                    .map_err(database_status)?;
+                    .map_err(database_status)?
+                    .map(|existing| existing.id);
 
-                let outcome = match existing_member {
-                    Some(existing) => {
-                        self.repository
-                            .update_operation(UpdateMember {
-                                member_id: existing.id,
-                                email: Some(member.email),
-                                first_name: Some(member.first_name),
-                                last_name: Some(member.last_name),
-                                joined_at: member.joined_at,
-                                discord_id: member.discord_id.map(Some),
-                                discord_username: member.discord_username.map(Some),
-                            })
-                            .await
-                    }
-                    None => self
+                match UpsertWrite::new(member, existing_id) {
+                    UpsertWrite::Update(update) => self.repository.update_operation(update).await,
+                    UpsertWrite::Create(create) => self
                         .repository
-                        .create_member(member)
+                        .create_member(create)
                         .await
                         .map(OperationOutcome::Created),
-                };
-
-                outcome.map(Into::into).map_err(database_status)
+                }
+                .map(Into::into)
+                .map_err(database_status)
             }
         }
     }
@@ -208,7 +194,9 @@ impl TryFrom<UpdateMemberRequest> for UpdateMember {
 }
 
 #[tonic::async_trait]
-impl members_admin_service_server::MembersAdminService for MembersAdminService {
+impl<R: MembersRepository> members_admin_service_server::MembersAdminService
+    for MembersAdminService<R>
+{
     async fn create_member(
         &self,
         request: Request<CreateMemberRequest>,
@@ -367,20 +355,19 @@ impl From<OperationOutcome> for Outcome {
 
 #[cfg(test)]
 mod tests {
-    use sqlx::postgres::PgPoolOptions;
+    use crate::db::members::fake::FakeMembersRepository;
     use tonic::Code;
 
     use crate::{grpc::timestamp, proto::members::admin::UpsertMemberRequest};
 
     use super::{members_admin_service_server::MembersAdminService as _, *};
 
-    async fn disconnected_service() -> MembersAdminService {
-        let pool = PgPoolOptions::new()
-            .connect_lazy("postgres://localhost/unused")
-            .unwrap();
-        pool.close().await;
-
-        MembersAdminService::new(MembersRepository::new(pool), 10_000, Duration::from_secs(5))
+    fn disconnected_service() -> MembersAdminService<FakeMembersRepository> {
+        MembersAdminService::new(
+            FakeMembersRepository::Unavailable,
+            10_000,
+            Duration::from_secs(5),
+        )
     }
 
     fn input(email: &str) -> CreateMemberRequest {
@@ -394,7 +381,7 @@ mod tests {
 
     #[tokio::test]
     async fn validation_precedes_database_access() {
-        let service = disconnected_service().await;
+        let service = disconnected_service();
 
         for field in 0..3 {
             let mut value = input("a@example.org");
@@ -448,7 +435,7 @@ mod tests {
 
     #[tokio::test]
     async fn bulk_validation_and_failures() {
-        let service = disconnected_service().await;
+        let service = disconnected_service();
 
         assert!(
             service
@@ -529,22 +516,8 @@ mod tests {
 
     #[tokio::test]
     async fn bulk_operations_time_out_individually_and_continue() {
-        // Accepts connections but never answers the Postgres handshake, so DB calls hang.
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            let mut held = Vec::new();
-            while let Ok((socket, _)) = listener.accept().await {
-                held.push(socket);
-            }
-        });
-
-        let pool = PgPoolOptions::new()
-            .acquire_timeout(Duration::from_secs(60))
-            .connect_lazy(&format!("postgres://u:p@{addr}/db?sslmode=disable"))
-            .unwrap();
         let service = MembersAdminService::new(
-            MembersRepository::new(pool),
+            FakeMembersRepository::Hang,
             10_000,
             Duration::from_millis(100),
         );
@@ -582,7 +555,7 @@ mod tests {
 
     #[tokio::test]
     async fn write_identifiers_follow_lookup_validation() {
-        let service = disconnected_service().await;
+        let service = disconnected_service();
         let discord_error =
             "discord_id must be a positive unsigned 64-bit integer containing only digits";
 
@@ -749,141 +722,76 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn single_and_bulk_writes_preserve_member_state() {
-        let Ok(url) = std::env::var("TEST_DATABASE_URL") else {
-            return;
+    #[test]
+    fn changed_fields_lists_only_differing_fields() {
+        let before = crate::proto::members::Member {
+            email: "a@example.org".into(),
+            discord_id: Some("1".into()),
+            discord_username: Some("name".into()),
+            ..Default::default()
         };
 
-        let pool = PgPoolOptions::new()
-            .max_connections(1)
-            .connect(&url)
-            .await
-            .unwrap();
+        assert!(changed_fields(&before, &before).paths.is_empty());
 
-        sqlx::query(r#"CREATE TEMP TABLE "Member" (LIKE public."Member" INCLUDING ALL)"#)
-            .execute(&pool)
-            .await
-            .unwrap();
+        let after = crate::proto::members::Member {
+            email: "b@example.org".into(),
+            discord_id: None,
+            discord_username: None,
+            ..before.clone()
+        };
 
-        let service = MembersAdminService::new(
-            MembersRepository::new(pool.clone()),
+        assert_eq!(
+            changed_fields(&before, &after).paths,
+            ["email", "discord_id", "discord_username"]
+        );
+    }
+
+    fn stored(id: i32) -> crate::domain::members::Member {
+        crate::domain::members::Member {
+            id,
+            email: format!("m{id}@example.org"),
+            first_name: "First".into(),
+            last_name: "Last".into(),
+            joined_at: DateTime::UNIX_EPOCH,
+            discord_id: None,
+            discord_username: None,
+            updated_at: DateTime::UNIX_EPOCH,
+            archived_at: (id == 2).then_some(DateTime::UNIX_EPOCH),
+        }
+    }
+
+    fn stored_service() -> MembersAdminService<FakeMembersRepository> {
+        MembersAdminService::new(
+            FakeMembersRepository::Stored(vec![stored(1), stored(2)]),
             10_000,
             Duration::from_secs(5),
-        );
+        )
+    }
+
+    #[tokio::test]
+    async fn single_writes_return_the_stored_member() {
+        let service = stored_service();
+        let joined_at = Timestamp {
+            seconds: 1_000,
+            nanos: 0,
+        };
 
         let created = service
-            .create_member(Request::new(input("one@example.org")))
-            .await
-            .unwrap()
-            .into_inner()
-            .member
-            .unwrap();
-
-        assert!(created.member_id > 0);
-        assert!(created.joined_at.is_some());
-
-        let error = service
-            .create_member(Request::new(input("one@example.org")))
-            .await
-            .unwrap_err();
-
-        assert_eq!(error.code(), Code::AlreadyExists);
-        assert_eq!(error.message(), "email already exists");
-
-        let linked = service
-            .update_member(Request::new(UpdateMemberRequest {
-                member_id: created.member_id,
-                discord_id: Some("42".into()),
-                discord_username: Some("linked".into()),
-                ..Default::default()
-            }))
-            .await
-            .unwrap()
-            .into_inner()
-            .member
-            .unwrap();
-
-        assert_eq!(linked.discord_id.as_deref(), Some("42"));
-
-        let error = service
             .create_member(Request::new(CreateMemberRequest {
-                discord_id: Some("42".into()),
-                discord_username: Some("other".into()),
-                ..input("two@example.org")
-            }))
-            .await
-            .unwrap_err();
-
-        assert_eq!(error.code(), Code::AlreadyExists);
-        assert_eq!(error.message(), "discord_id already exists");
-
-        let kept = service
-            .update_member(Request::new(UpdateMemberRequest {
-                member_id: created.member_id,
-                last_name: Some("Kept".into()),
-                ..Default::default()
+                joined_at: Some(joined_at),
+                ..input("new@example.org")
             }))
             .await
             .unwrap()
             .into_inner()
             .member
             .unwrap();
-
-        assert_eq!(kept.discord_id.as_deref(), Some("42"));
-
-        for (discord_id, discord_username) in [
-            (Some(String::new()), None),
-            (None, Some(String::new())),
-            (Some(String::new()), Some("still-here".into())),
-        ] {
-            let error = service
-                .update_member(Request::new(UpdateMemberRequest {
-                    member_id: created.member_id,
-                    discord_id,
-                    discord_username,
-                    ..Default::default()
-                }))
-                .await
-                .unwrap_err();
-            assert_eq!(error.code(), Code::InvalidArgument);
-            assert_eq!(
-                error.message(),
-                "discord_id and discord_username must be set or cleared together"
-            );
-        }
-
-        let unlinked = service
-            .update_member(Request::new(UpdateMemberRequest {
-                member_id: created.member_id,
-                discord_id: Some(String::new()),
-                discord_username: Some(String::new()),
-                ..Default::default()
-            }))
-            .await
-            .unwrap()
-            .into_inner()
-            .member
-            .unwrap();
-        assert_eq!(unlinked.discord_id, None);
-        assert_eq!(unlinked.discord_username, None);
-
-        let error = service
-            .update_member(Request::new(UpdateMemberRequest {
-                member_id: created.member_id,
-                discord_username: Some("orphan".into()),
-                ..Default::default()
-            }))
-            .await
-            .unwrap_err();
-        assert_eq!(
-            error.message(),
-            "discord_id and discord_username must be set or cleared together"
-        );
+        assert_eq!(created.member_id, 3);
+        assert_eq!(created.joined_at, Some(joined_at));
 
         let updated = service
             .update_member(Request::new(UpdateMemberRequest {
-                member_id: created.member_id,
+                member_id: 1,
                 first_name: Some("New".into()),
                 ..Default::default()
             }))
@@ -892,127 +800,54 @@ mod tests {
             .into_inner()
             .member
             .unwrap();
-
         assert_eq!(updated.first_name, "New");
-        assert_eq!(updated.email, created.email);
-        assert_eq!(updated.joined_at, created.joined_at);
+        assert_eq!(updated.last_name, "Last");
 
         let archived = service
-            .archive_member(Request::new(ArchiveMemberRequest {
-                member_id: created.member_id,
-            }))
+            .archive_member(Request::new(ArchiveMemberRequest { member_id: 1 }))
             .await
             .unwrap()
             .into_inner()
             .member
             .unwrap();
-
         assert!(archived.archived_at.is_some());
-        assert_eq!(archived.archived_at, archived.updated_at);
 
-        assert_eq!(
-            service
-                .archive_member(Request::new(ArchiveMemberRequest {
-                    member_id: created.member_id
-                }))
-                .await
-                .unwrap()
-                .into_inner()
-                .member,
-            Some(archived.clone())
-        );
-
-        for error in [
-            service
-                .update_member(Request::new(UpdateMemberRequest {
-                    member_id: i32::MAX,
-                    ..Default::default()
-                }))
-                .await
-                .unwrap_err(),
-            service
-                .archive_member(Request::new(ArchiveMemberRequest {
-                    member_id: i32::MAX,
-                }))
-                .await
-                .unwrap_err(),
-        ] {
-            assert_eq!(error.code(), Code::NotFound);
-        }
-
-        let member = input("bulk@example.org");
-        let changed = CreateMemberRequest {
-            first_name: "Changed".into(),
-            ..member.clone()
-        };
-
-        let results = service
-            .bulk_member_operations(Request::new(BulkMemberOperationsRequest {
-                operations: vec![
-                    operation(Operation::Create(member.clone())),
-                    operation(Operation::Create(member)),
-                    operation(Operation::Upsert(UpsertMemberRequest {
-                        member: Some(changed.clone()),
-                    })),
-                    operation(Operation::Upsert(UpsertMemberRequest {
-                        member: Some(changed),
-                    })),
-                    operation(Operation::Upsert(UpsertMemberRequest {
-                        member: Some(input("new@example.org")),
-                    })),
-                ],
-            }))
+        let error = service
+            .archive_member(Request::new(ArchiveMemberRequest { member_id: 0 }))
             .await
-            .unwrap()
-            .into_inner()
-            .results;
+            .unwrap_err();
+        assert_eq!(error.code(), Code::InvalidArgument);
+    }
 
-        for (index, result) in results.iter().enumerate() {
-            assert_eq!(result.index, index as u32);
-        }
-
-        assert!(matches!(results[0].outcome, Some(Outcome::Created(_))));
-        assert!(matches!(results[1].outcome, Some(Outcome::Failed(_))));
-
-        let Some(Outcome::Updated(event)) = &results[2].outcome else {
-            panic!("expected upsert update");
+    #[tokio::test]
+    async fn bulk_operations_report_each_outcome() {
+        let changed = |email: &str| CreateMemberRequest {
+            first_name: "Changed".into(),
+            ..input(email)
         };
-        assert_eq!(event.after.as_ref().unwrap().first_name, "Changed");
 
-        let Some(Outcome::Unchanged(unchanged)) = &results[3].outcome else {
-            panic!("expected unchanged upsert");
-        };
-        assert_eq!(unchanged.member, event.after);
-
-        assert!(matches!(results[4].outcome, Some(Outcome::Created(_))));
-
-        let bulk_id = event.after.as_ref().unwrap().member_id;
-        assert_eq!(
-            service
-                .update_member(Request::new(UpdateMemberRequest {
-                    member_id: bulk_id,
-                    email: Some("one@example.org".into()),
-                    ..Default::default()
-                }))
-                .await
-                .unwrap_err()
-                .code(),
-            Code::AlreadyExists
-        );
-
-        let results = service
+        let results = stored_service()
             .bulk_member_operations(Request::new(BulkMemberOperationsRequest {
                 operations: vec![
-                    operation(Operation::Archive(ArchiveMemberRequest {
-                        member_id: bulk_id,
-                    })),
-                    operation(Operation::Archive(ArchiveMemberRequest {
-                        member_id: bulk_id,
-                    })),
+                    operation(Operation::Create(input("new@example.org"))),
                     operation(Operation::Update(UpdateMemberRequest {
-                        member_id: bulk_id,
+                        member_id: 1,
+                        first_name: Some("New".into()),
                         ..Default::default()
                     })),
+                    operation(Operation::Update(UpdateMemberRequest {
+                        member_id: 1,
+                        first_name: Some("First".into()),
+                        ..Default::default()
+                    })),
+                    operation(Operation::Archive(ArchiveMemberRequest { member_id: 1 })),
+                    operation(Operation::Archive(ArchiveMemberRequest { member_id: 2 })),
+                    operation(Operation::Upsert(UpsertMemberRequest {
+                        member: Some(changed("m1@example.org")),
+                    })),
+                    operation(Operation::Upsert(UpsertMemberRequest {
+                        member: Some(changed("fresh@example.org")),
+                    })),
                 ],
             }))
             .await
@@ -1020,18 +855,32 @@ mod tests {
             .into_inner()
             .results;
 
-        let Some(Outcome::Archived(first)) = &results[0].outcome else {
-            panic!("expected archive");
-        };
+        let outcomes: Vec<_> = results
+            .into_iter()
+            .map(|result| match result.outcome {
+                Some(Outcome::Created(created)) => ("created", created.member.unwrap().first_name),
+                Some(Outcome::Updated(updated)) => {
+                    ("updated", updated.changed_fields.unwrap().paths.join(","))
+                }
+                Some(Outcome::Unchanged(unchanged)) => {
+                    ("unchanged", unchanged.member.unwrap().first_name)
+                }
+                Some(Outcome::Archived(archived)) => ("archived", archived.member.unwrap().email),
+                other => panic!("unexpected outcome {other:?}"),
+            })
+            .collect();
 
-        for result in &results[1..] {
-            let Some(Outcome::Unchanged(value)) = &result.outcome else {
-                panic!("expected unchanged member");
-            };
-
-            assert_eq!(value.member, first.member);
-        }
-
-        pool.close().await;
+        assert_eq!(
+            outcomes,
+            [
+                ("created", "First".to_owned()),
+                ("updated", "first_name".to_owned()),
+                ("unchanged", "First".to_owned()),
+                ("archived", "m1@example.org".to_owned()),
+                ("unchanged", "First".to_owned()),
+                ("updated", "first_name".to_owned()),
+                ("created", "Changed".to_owned()),
+            ]
+        );
     }
 }

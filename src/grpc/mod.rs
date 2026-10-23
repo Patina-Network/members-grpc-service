@@ -107,6 +107,61 @@ mod tests {
         assert_eq!(status.message(), "database operation failed");
     }
 
+    #[derive(Debug)]
+    struct UniqueViolation(&'static str);
+
+    impl std::fmt::Display for UniqueViolation {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("duplicate key value violates unique constraint")
+        }
+    }
+
+    impl std::error::Error for UniqueViolation {}
+
+    impl sqlx::error::DatabaseError for UniqueViolation {
+        fn message(&self) -> &str {
+            "duplicate key value violates unique constraint"
+        }
+
+        fn constraint(&self) -> Option<&str> {
+            Some(self.0)
+        }
+
+        fn as_error(&self) -> &(dyn std::error::Error + Send + Sync + 'static) {
+            self
+        }
+
+        fn as_error_mut(&mut self) -> &mut (dyn std::error::Error + Send + Sync + 'static) {
+            self
+        }
+
+        fn into_error(self: Box<Self>) -> Box<dyn std::error::Error + Send + Sync + 'static> {
+            self
+        }
+
+        fn kind(&self) -> sqlx::error::ErrorKind {
+            sqlx::error::ErrorKind::UniqueViolation
+        }
+    }
+
+    #[test]
+    fn unique_violations_name_the_conflicting_field() {
+        for (constraint, message) in [
+            ("Member_email_key", "email already exists"),
+            ("Member_discordId_key", "discord_id already exists"),
+            ("Other_key", "record already exists"),
+        ] {
+            let status =
+                database_status(sqlx::Error::Database(Box::new(UniqueViolation(constraint))));
+            assert_eq!(status.code(), Code::AlreadyExists);
+            assert_eq!(status.message(), message);
+        }
+
+        let status = database_status(sqlx::Error::InvalidArgument("bad pair".into()));
+        assert_eq!(status.code(), Code::InvalidArgument);
+        assert_eq!(status.message(), "bad pair");
+    }
+
     #[test]
     fn timestamps_round_trip_at_database_precision() {
         for (seconds, nanos) in [(0, -1), (i64::MAX, 0)] {

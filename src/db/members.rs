@@ -35,9 +35,10 @@ pub struct UpdateMember {
     pub first_name: Option<String>,
     pub last_name: Option<String>,
     pub joined_at: Option<DateTime<Utc>>,
-    /// `None` = dont change, `Some(None)` unlinks it
+    /// `None` = dont change, `Some(None)` clears it
     pub discord_id: Option<Option<String>>,
-    pub discord_username: Option<String>,
+    /// `None` = dont change, `Some(None)` clears it
+    pub discord_username: Option<Option<String>>,
 }
 
 #[derive(Clone)]
@@ -254,25 +255,7 @@ impl MembersRepository {
         .fetch_one(&mut **tx)
         .await?;
 
-        let mut after = before.clone();
-        if let Some(email) = input.email {
-            after.email = email;
-        }
-        if let Some(first_name) = input.first_name {
-            after.first_name = first_name;
-        }
-        if let Some(last_name) = input.last_name {
-            after.last_name = last_name;
-        }
-        if let Some(joined_at) = input.joined_at {
-            after.joined_at = joined_at;
-        }
-        if let Some(discord_id) = input.discord_id {
-            after.discord_id = discord_id;
-        }
-        if let Some(discord_username) = input.discord_username {
-            after.discord_username = Some(discord_username);
-        }
+        let after = input.apply(&before)?;
 
         if skip_unchanged && after == before {
             return Ok(UpdateResult {
@@ -308,7 +291,7 @@ impl MembersRepository {
                 "updatedAt" AS updated_at,
                 "archivedAt" AS archived_at
             "#,
-            input.member_id,
+            before.id,
             after.email,
             after.first_name,
             after.last_name,
@@ -416,5 +399,135 @@ impl UpdateResult {
         } else {
             OperationOutcome::Unchanged(self.after)
         }
+    }
+}
+
+impl UpdateMember {
+    /// Merges into `before`. Discord is checked only when touched, so a row with
+    /// one half already set still accepts other edits.
+    fn apply(self, before: &Member) -> Result<Member, sqlx::Error> {
+        let mut after = before.clone();
+        if let Some(email) = self.email {
+            after.email = email;
+        }
+        if let Some(first_name) = self.first_name {
+            after.first_name = first_name;
+        }
+        if let Some(last_name) = self.last_name {
+            after.last_name = last_name;
+        }
+        if let Some(joined_at) = self.joined_at {
+            after.joined_at = joined_at;
+        }
+
+        let discord_touched = self.discord_id.is_some() || self.discord_username.is_some();
+        if let Some(discord_id) = self.discord_id {
+            after.discord_id = discord_id;
+        }
+        if let Some(discord_username) = self.discord_username {
+            after.discord_username = discord_username;
+        }
+        if discord_touched && after.discord_id.is_some() != after.discord_username.is_some() {
+            return Err(sqlx::Error::InvalidArgument(
+                "discord_id and discord_username must be set or cleared together".into(),
+            ));
+        }
+
+        Ok(after)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn member(discord: Option<(&str, &str)>) -> Member {
+        Member {
+            id: 1,
+            email: "a@example.org".into(),
+            first_name: "First".into(),
+            last_name: "Last".into(),
+            joined_at: DateTime::UNIX_EPOCH,
+            discord_id: discord.map(|(id, _)| id.into()),
+            discord_username: discord.map(|(_, name)| name.into()),
+            updated_at: DateTime::UNIX_EPOCH,
+            archived_at: None,
+        }
+    }
+
+    fn update(
+        discord_id: Option<Option<&str>>,
+        discord_username: Option<Option<&str>>,
+    ) -> UpdateMember {
+        UpdateMember {
+            member_id: 1,
+            email: None,
+            first_name: None,
+            last_name: None,
+            joined_at: None,
+            discord_id: discord_id.map(|v| v.map(str::to_owned)),
+            discord_username: discord_username.map(|v| v.map(str::to_owned)),
+        }
+    }
+
+    fn discord(member: &Member) -> (Option<&str>, Option<&str>) {
+        (
+            member.discord_id.as_deref(),
+            member.discord_username.as_deref(),
+        )
+    }
+
+    #[test]
+    fn discord_id_and_username_change_together() {
+        let linked = member(Some(("1", "name")));
+        let unlinked = member(None);
+
+        for (before, input, expected) in [
+            (&linked, update(Some(None), Some(None)), (None, None)),
+            (
+                &linked,
+                update(Some(Some("2")), None),
+                (Some("2"), Some("name")),
+            ),
+            (
+                &linked,
+                update(None, Some(Some("new"))),
+                (Some("1"), Some("new")),
+            ),
+            (
+                &unlinked,
+                update(Some(Some("2")), Some(Some("n"))),
+                (Some("2"), Some("n")),
+            ),
+        ] {
+            assert_eq!(discord(&input.apply(before).unwrap()), expected);
+        }
+
+        for (before, input) in [
+            (&linked, update(Some(None), None)),
+            (&linked, update(None, Some(None))),
+            (&linked, update(Some(None), Some(Some("still-here")))),
+            (&unlinked, update(None, Some(Some("orphan")))),
+            (&unlinked, update(Some(Some("2")), None)),
+        ] {
+            let error = input.apply(before).unwrap_err();
+            assert!(matches!(error, sqlx::Error::InvalidArgument(_)), "{error}");
+        }
+    }
+
+    #[test]
+    fn untouched_discord_does_not_block_other_edits_on_half_set_rows() {
+        let mut half_set = member(Some(("1", "name")));
+        half_set.discord_username = None;
+
+        let after = UpdateMember {
+            first_name: Some("New".into()),
+            ..update(None, None)
+        }
+        .apply(&half_set)
+        .unwrap();
+
+        assert_eq!(after.first_name, "New");
+        assert_eq!(discord(&after), (Some("1"), None));
     }
 }

@@ -113,6 +113,7 @@ async fn main() -> anyhow::Result<()> {
         MembersAdminServiceServer::new(MembersAdminService::new(
             MembersRepository::new(db.clone()),
             config.max_bulk_operations,
+            config.bulk_operation_timeout,
         ))
     });
 

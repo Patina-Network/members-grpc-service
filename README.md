@@ -34,6 +34,7 @@ cargo run # runs http on :3000, grpc on :50051
 - `ENABLE_CORE_ADMIN_SERVICE`: `true` to mount `MembersAdminService`, default `false`.
 - `GRPC_REFLECTION`: `true` to serve gRPC reflection (lists only mounted services), default `false`.
 - `MAX_BULK_OPERATIONS`: maximum operations per `bulkMemberOperations` request, default `10000`.
+- `BULK_OPERATION_TIMEOUT_MS`: timeout per `bulkMemberOperations` operation; a timed-out operation fails and the rest still run. Default and maximum `5000`.
 
 `example.env` enables reflection and the core admin service for local development.
 

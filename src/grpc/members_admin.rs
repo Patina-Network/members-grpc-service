@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use chrono::{DateTime, Utc};
 use prost_types::Timestamp;
 use tonic::{Request, Response, Status};
@@ -24,13 +26,19 @@ pub use members_admin_service_server::MembersAdminServiceServer;
 pub struct MembersAdminService {
     repository: MembersRepository,
     max_bulk_operations: usize,
+    operation_timeout: Duration,
 }
 
 impl MembersAdminService {
-    pub fn new(repository: MembersRepository, max_bulk_operations: usize) -> Self {
+    pub fn new(
+        repository: MembersRepository,
+        max_bulk_operations: usize,
+        operation_timeout: Duration,
+    ) -> Self {
         Self {
             repository,
             max_bulk_operations,
+            operation_timeout,
         }
     }
 
@@ -82,7 +90,7 @@ impl MembersAdminService {
                                 last_name: Some(member.last_name),
                                 joined_at: member.joined_at,
                                 discord_id: member.discord_id.map(Some),
-                                discord_username: member.discord_username,
+                                discord_username: member.discord_username.map(Some),
                             })
                             .await
                     }
@@ -132,6 +140,14 @@ impl TryFrom<CreateMemberRequest> for CreateMember {
         if let Some(id) = &input.discord_id {
             validate_discord_id(id)?;
         }
+        if let Some(name) = &input.discord_username {
+            required(name, "discord_username")?;
+        }
+        if input.discord_id.is_some() != input.discord_username.is_some() {
+            return Err(Status::invalid_argument(
+                "discord_id and discord_username must be set or cleared together",
+            ));
+        }
 
         required(&input.first_name, "first_name")?;
         required(&input.last_name, "last_name")?;
@@ -153,9 +169,16 @@ impl TryFrom<UpdateMemberRequest> for UpdateMember {
     fn try_from(input: UpdateMemberRequest) -> Result<Self, Status> {
         validate_member_id(input.member_id)?;
 
-        // An explicit "" unlinks Discord; anything else must be a valid ID.
+        // An explicit "" clears the Discord field; anything else must be valid.
         if let Some(id) = input.discord_id.as_deref().filter(|id| !id.is_empty()) {
             validate_discord_id(id)?;
+        }
+        if let Some(name) = input
+            .discord_username
+            .as_deref()
+            .filter(|name| !name.is_empty())
+        {
+            required(name, "discord_username")?;
         }
 
         if let Some(value) = &input.email {
@@ -177,7 +200,9 @@ impl TryFrom<UpdateMemberRequest> for UpdateMember {
             first_name: input.first_name,
             last_name: input.last_name,
             discord_id: input.discord_id.map(|id| (!id.is_empty()).then_some(id)),
-            discord_username: input.discord_username,
+            discord_username: input
+                .discord_username
+                .map(|name| (!name.is_empty()).then_some(name)),
         })
     }
 }
@@ -251,14 +276,31 @@ impl members_admin_service_server::MembersAdminService for MembersAdminService {
 
         let mut results = Vec::with_capacity(operations.len());
         for (index, operation) in operations.into_iter().enumerate() {
-            let outcome = self
-                .apply_operation(operation)
-                .await
-                .unwrap_or_else(|status| {
-                    Outcome::Failed(MemberOperationFailed {
-                        error: format!("{:?}: {}", status.code(), status.message()),
+            let kind = match &operation.operation {
+                Some(Operation::Create(_)) => "create",
+                Some(Operation::Update(_)) => "update",
+                Some(Operation::Archive(_)) => "archive",
+                Some(Operation::Upsert(_)) => "upsert",
+                None => "missing",
+            };
+
+            let outcome =
+                tokio::time::timeout(self.operation_timeout, self.apply_operation(operation))
+                    .await
+                    .unwrap_or_else(|_| {
+                        tracing::error!(
+                            index,
+                            kind,
+                            timeout = ?self.operation_timeout,
+                            "bulk member operation timed out"
+                        );
+                        Err(Status::deadline_exceeded("bulk member operation timed out"))
                     })
-                });
+                    .unwrap_or_else(|status| {
+                        Outcome::Failed(MemberOperationFailed {
+                            error: format!("{:?}: {}", status.code(), status.message()),
+                        })
+                    });
 
             results.push(MemberOperationResult {
                 index: index as u32,
@@ -338,7 +380,7 @@ mod tests {
             .unwrap();
         pool.close().await;
 
-        MembersAdminService::new(MembersRepository::new(pool), 10_000)
+        MembersAdminService::new(MembersRepository::new(pool), 10_000, Duration::from_secs(5))
     }
 
     fn input(email: &str) -> CreateMemberRequest {
@@ -418,7 +460,8 @@ mod tests {
                 .is_empty()
         );
 
-        let limited = MembersAdminService::new(service.repository.clone(), 1);
+        let limited =
+            MembersAdminService::new(service.repository.clone(), 1, Duration::from_secs(5));
         let error = limited
             .bulk_member_operations(Request::new(BulkMemberOperationsRequest {
                 operations: vec![MemberOperation::default(), MemberOperation::default()],
@@ -482,6 +525,59 @@ mod tests {
 
             assert!(failure.error.contains(expected), "{}", failure.error);
         }
+    }
+
+    #[tokio::test]
+    async fn bulk_operations_time_out_individually_and_continue() {
+        // Accepts connections but never answers the Postgres handshake, so DB calls hang.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                held.push(socket);
+            }
+        });
+
+        let pool = PgPoolOptions::new()
+            .acquire_timeout(Duration::from_secs(60))
+            .connect_lazy(&format!("postgres://u:p@{addr}/db?sslmode=disable"))
+            .unwrap();
+        let service = MembersAdminService::new(
+            MembersRepository::new(pool),
+            10_000,
+            Duration::from_millis(100),
+        );
+
+        let results = service
+            .bulk_member_operations(Request::new(BulkMemberOperationsRequest {
+                operations: vec![
+                    operation(Operation::Create(input("a@example.org"))),
+                    MemberOperation::default(),
+                    operation(Operation::Create(input("b@example.org"))),
+                ],
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .results;
+
+        let errors: Vec<_> = results
+            .into_iter()
+            .map(|result| match result.outcome {
+                Some(Outcome::Failed(failure)) => failure.error,
+                other => panic!("expected failure, got {other:?}"),
+            })
+            .collect();
+
+        assert_eq!(
+            errors,
+            [
+                "DeadlineExceeded: bulk member operation timed out",
+                "InvalidArgument: operation is required",
+                "DeadlineExceeded: bulk member operation timed out",
+            ]
+        );
     }
 
     #[tokio::test]
@@ -554,6 +650,7 @@ mod tests {
         for discord_id in [None, Some("1"), Some("18446744073709551615")] {
             let create = CreateMemberRequest {
                 discord_id: discord_id.map(str::to_owned),
+                discord_username: discord_id.map(|_| "name".to_owned()),
                 ..input("member+tag@example.org")
             };
 
@@ -572,6 +669,7 @@ mod tests {
                         member_id: 1,
                         email: Some(create.email),
                         discord_id: create.discord_id,
+                        discord_username: create.discord_username,
                         ..Default::default()
                     }))
                     .await
@@ -601,6 +699,31 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.code(), Code::Unavailable);
+
+        for (discord_id, discord_username, message) in [
+            (
+                Some("1"),
+                None,
+                "discord_id and discord_username must be set or cleared together",
+            ),
+            (
+                None,
+                Some("name"),
+                "discord_id and discord_username must be set or cleared together",
+            ),
+            (Some("1"), Some("  "), "discord_username is required"),
+        ] {
+            let error = service
+                .create_member(Request::new(CreateMemberRequest {
+                    discord_id: discord_id.map(str::to_owned),
+                    discord_username: discord_username.map(str::to_owned),
+                    ..input("a@example.org")
+                }))
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), Code::InvalidArgument);
+            assert_eq!(error.message(), message);
+        }
     }
 
     #[test]
@@ -643,7 +766,11 @@ mod tests {
             .await
             .unwrap();
 
-        let service = MembersAdminService::new(MembersRepository::new(pool.clone()), 10_000);
+        let service = MembersAdminService::new(
+            MembersRepository::new(pool.clone()),
+            10_000,
+            Duration::from_secs(5),
+        );
 
         let created = service
             .create_member(Request::new(input("one@example.org")))
@@ -668,6 +795,7 @@ mod tests {
             .update_member(Request::new(UpdateMemberRequest {
                 member_id: created.member_id,
                 discord_id: Some("42".into()),
+                discord_username: Some("linked".into()),
                 ..Default::default()
             }))
             .await
@@ -681,6 +809,7 @@ mod tests {
         let error = service
             .create_member(Request::new(CreateMemberRequest {
                 discord_id: Some("42".into()),
+                discord_username: Some("other".into()),
                 ..input("two@example.org")
             }))
             .await
@@ -703,10 +832,32 @@ mod tests {
 
         assert_eq!(kept.discord_id.as_deref(), Some("42"));
 
+        for (discord_id, discord_username) in [
+            (Some(String::new()), None),
+            (None, Some(String::new())),
+            (Some(String::new()), Some("still-here".into())),
+        ] {
+            let error = service
+                .update_member(Request::new(UpdateMemberRequest {
+                    member_id: created.member_id,
+                    discord_id,
+                    discord_username,
+                    ..Default::default()
+                }))
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), Code::InvalidArgument);
+            assert_eq!(
+                error.message(),
+                "discord_id and discord_username must be set or cleared together"
+            );
+        }
+
         let unlinked = service
             .update_member(Request::new(UpdateMemberRequest {
                 member_id: created.member_id,
                 discord_id: Some(String::new()),
+                discord_username: Some(String::new()),
                 ..Default::default()
             }))
             .await
@@ -715,6 +866,20 @@ mod tests {
             .member
             .unwrap();
         assert_eq!(unlinked.discord_id, None);
+        assert_eq!(unlinked.discord_username, None);
+
+        let error = service
+            .update_member(Request::new(UpdateMemberRequest {
+                member_id: created.member_id,
+                discord_username: Some("orphan".into()),
+                ..Default::default()
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.message(),
+            "discord_id and discord_username must be set or cleared together"
+        );
 
         let updated = service
             .update_member(Request::new(UpdateMemberRequest {

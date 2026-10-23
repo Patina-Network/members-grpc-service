@@ -23,6 +23,7 @@ pub fn database_status(error: sqlx::Error) -> Status {
             })
         }
         sqlx::Error::RowNotFound => Status::not_found("record not found"),
+        sqlx::Error::InvalidArgument(message) => Status::invalid_argument(message),
         _ => Status::internal("database operation failed"),
     }
 }

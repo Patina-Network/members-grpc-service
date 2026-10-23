@@ -1,4 +1,4 @@
-use std::env;
+use std::{env, time::Duration};
 
 use anyhow::Context;
 use tracing::info;
@@ -10,6 +10,7 @@ pub struct Config {
     pub http_port: u16,
     pub grpc_reflection: bool,
     pub max_bulk_operations: usize,
+    pub bulk_operation_timeout: Duration,
     pub version: Option<String>,
     pub database_host: String,
     pub database_port: u16,
@@ -26,6 +27,7 @@ impl Config {
             http_port = self.http_port,
             grpc_reflection = self.grpc_reflection,
             max_bulk_operations = self.max_bulk_operations,
+            bulk_operation_timeout = ?self.bulk_operation_timeout,
             version = self.version.as_deref().unwrap_or("N/A"),
             database_host = self.database_host,
             database_port = self.database_port,
@@ -50,6 +52,12 @@ impl Config {
             max_bulk_operations: var("MAX_BULK_OPERATIONS")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(10_000),
+            bulk_operation_timeout: Duration::from_millis(
+                var("BULK_OPERATION_TIMEOUT_MS")
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(5_000u64)
+                    .min(5_000),
+            ),
             grpc_port: var("GRPC_PORT")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(50051),

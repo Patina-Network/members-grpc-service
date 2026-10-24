@@ -25,7 +25,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Pipeline
-        uses: tahminator/pipeline/actions/setup@0d54deb9e9abab9530e4aa889a6c79c88a0ff5c7 # 1.0.99
+        uses: tahminator/pipeline/actions/setup@aa4f2ffcca89a9dcad96c1eac1e57b5a533f8c26 # 1.0.100
         with:
           INSTALL_JUST: true
           INSTALL_MIGRATE: "true"
@@ -42,7 +42,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup pipeline
-        uses: tahminator/pipeline/actions/setup@0d54deb9e9abab9530e4aa889a6c79c88a0ff5c7 # 1.0.99
+        uses: tahminator/pipeline/actions/setup@aa4f2ffcca89a9dcad96c1eac1e57b5a533f8c26 # 1.0.100
         with:
           LINT_CI: true
           SECRETS: ${{ toJSON(secrets) }}
@@ -70,7 +70,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Pipeline
-        uses: tahminator/pipeline/actions/setup@0d54deb9e9abab9530e4aa889a6c79c88a0ff5c7 # 1.0.99
+        uses: tahminator/pipeline/actions/setup@aa4f2ffcca89a9dcad96c1eac1e57b5a533f8c26 # 1.0.100
         with:
           LINT_CI: true
           SECRETS: ${{ toJSON(secrets) }}
@@ -113,7 +113,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Pipeline
-        uses: tahminator/pipeline/actions/setup@0d54deb9e9abab9530e4aa889a6c79c88a0ff5c7 # 1.0.99
+        uses: tahminator/pipeline/actions/setup@aa4f2ffcca89a9dcad96c1eac1e57b5a533f8c26 # 1.0.100
         with:
           LINT_CI: true
           SECRETS: ${{ toJSON(secrets) }}
@@ -185,7 +185,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Setup pipeline
-        uses: tahminator/pipeline/actions/setup@0d54deb9e9abab9530e4aa889a6c79c88a0ff5c7 # 1.0.99
+        uses: tahminator/pipeline/actions/setup@aa4f2ffcca89a9dcad96c1eac1e57b5a533f8c26 # 1.0.100
         with:
           LINT_CI: true
           INSTALL_PROTO_DEPENDENCIES: true
@@ -217,7 +217,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup pipeline
-        uses: tahminator/pipeline/actions/setup@0d54deb9e9abab9530e4aa889a6c79c88a0ff5c7 # 1.0.99
+        uses: tahminator/pipeline/actions/setup@aa4f2ffcca89a9dcad96c1eac1e57b5a533f8c26 # 1.0.100
         with:
           LINT_CI: true
           SECRETS: ${{ toJSON(secrets) }}

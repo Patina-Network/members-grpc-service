@@ -1,0 +1,80 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/SchemaStore/schemastore/refs/heads/master/src/schemas/json/github-workflow.json
+name: Migrate Staging Database
+run-name: Migrate staging database from PR #${{ inputs.prId }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      prId:
+        description: PR whose migrations should be applied
+        required: true
+        type: string
+      repository:
+        description: The repository from which the slash command was dispatched
+        required: true
+        type: string
+      comment-id:
+        description: The comment-id of the slash command
+        required: true
+        type: string
+      author:
+        description: The author that triggered this action
+        required: true
+        type: string
+
+# All pull requests share the staging database, so a new run waits instead of cancelling one in progress.
+concurrency:
+  group: staging-db-migrations
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  migrate:
+    name: Migrate staging DB
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - name: Get PR head SHA
+        id: pr-head
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          PR_ID: ${{ inputs.prId }}
+        with:
+          result-encoding: string
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: Number(process.env.PR_ID),
+            });
+            return pr.head.sha;
+
+      - name: Checkout PR
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.pr-head.outputs.result }}
+          fetch-depth: 0
+
+      - name: Setup Pipeline
+        uses: tahminator/pipeline/actions/setup@aa4f2ffcca89a9dcad96c1eac1e57b5a533f8c26 # 1.0.100
+        with:
+          LINT_CI: true
+          SECRETS: ${{ toJSON(secrets) }}
+          INSTALL_JUST: true
+          INSTALL_MIGRATE: "true"
+          HEADSCALE_ADDRESS: ${{ secrets.HEADSCALE_ADDRESS }}
+          HEADSCALE_USER: ${{ secrets.HEADSCALE_USER }}
+          HEADSCALE_PREAUTHKEY: ${{ secrets.HEADSCALE_PREAUTHKEY }}
+
+      - name: Apply staging database migrations
+        env:
+          DATABASE_HOST: ${{ secrets.STAGING_MIGRATION_DATABASE_HOST }}
+          DATABASE_PORT: ${{ secrets.STAGING_MIGRATION_DATABASE_PORT }}
+          DATABASE_NAME: ${{ secrets.STAGING_MIGRATION_DATABASE_NAME }}
+          DATABASE_USER: ${{ secrets.STAGING_MIGRATION_DATABASE_USER }}
+          DATABASE_PASSWORD: ${{ secrets.STAGING_MIGRATION_DATABASE_PASSWORD }}
+          DATABASE_SSLMODE: require
+        run: bun run .github/scripts/src/migrate-staging/index.ts --sha="${{ steps.pr-head.outputs.result }}" --username="${{ inputs.author }}" --runUrl="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

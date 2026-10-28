@@ -1,0 +1,37 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/SchemaStore/schemastore/refs/heads/master/src/schemas/json/github-workflow.json
+name: Slash Command Dispatch
+run-name: Slash Command Dispatch
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  slashCommandDispatch:
+    if: >-
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/')
+    runs-on: ubuntu-26.04
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # stay on trusted default-branch code until the commands action authorizes the commenter
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Setup pipeline
+        uses: tahminator/pipeline/actions/setup@aa4f2ffcca89a9dcad96c1eac1e57b5a533f8c26 # 1.0.100
+        with:
+          LINT_CI: true
+
+      - name: Slash Command Dispatch
+        uses: tahminator/pipeline/actions/commands@aa4f2ffcca89a9dcad96c1eac1e57b5a533f8c26 # 1.0.100
+        with:
+          APP_ID: ${{ secrets._GITHUB_APP_APP_ID }}
+          PRIVATE_KEY: ${{ secrets._GITHUB_APP_PEM_CONTENT }}
+          DYNAMIC_COMMANDS_BUN_SCRIPT: .github/scripts/src/load-slash-commands/index.ts

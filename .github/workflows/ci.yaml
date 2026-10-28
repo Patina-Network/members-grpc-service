@@ -96,7 +96,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     needs: [test, testMigrations]
 
-    if: github.event_name == 'pull_request'
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
 
     strategy:
       matrix:
@@ -131,6 +133,35 @@ jobs:
 
       - name: Run script
         run: bun run .github/scripts/src/build-server/staging --sha=${{ github.event.pull_request.head.sha }} --prId=${{ github.event.pull_request.number }} --arch=${{ matrix.arch }}
+
+  deployStaging:
+    name: Deploy to staging
+    runs-on: ubuntu-26.04
+    needs: [buildUploadServerImageStaging]
+
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+
+    concurrency:
+      group: deploy-staging
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Pipeline
+        uses: tahminator/pipeline/actions/setup@aa4f2ffcca89a9dcad96c1eac1e57b5a533f8c26 # 1.0.100
+        with:
+          SECRETS: ${{ toJSON(secrets) }}
+          LINT_CI: true
+
+      - name: Deploy server
+        uses: ./.github/composite/deploy-server
+        with:
+          ENVIRONMENT: staging
+          SHA: ${{ github.event.pull_request.head.sha }}
 
   buildUploadServerImage:
     name: Build gRPC server Docker image and deploy to Docker Hub (${{ matrix.arch }})

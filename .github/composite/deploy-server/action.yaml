@@ -1,14 +1,23 @@
 name: Deploy server
-description: Deploys server image to k8s cluster
+description: Updates the server image tag in k8s-manifests
 
 inputs:
-  VERSION:
-    description: "For example, '1.2.34'"
-    required: true
+  RELEASE_TAG:
+    description: "Deploy the version named by this tag, for example 1.2.3"
+    required: false
+    default: ""
+  SHA:
+    description: "Deploy the image built from this commit. Set exactly one of RELEASE_TAG or SHA."
+    required: false
+    default: ""
+  ENVIRONMENT:
+    description: "Environment to deploy to: staging or production"
+    required: false
+    default: "production"
 
 runs:
   using: composite
   steps:
-    - name: Deploy service
+    - name: Update k8s-manifests
       shell: bash
-      run: bun run .github/scripts/src/deploy-server --newTagVersion "${{ inputs.VERSION }}"
+      run: bun run .github/scripts/src/deploy-server --environment "${{ inputs.ENVIRONMENT }}" --releaseTag "${{ inputs.RELEASE_TAG }}" --sha "${{ inputs.SHA }}"

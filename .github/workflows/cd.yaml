@@ -87,7 +87,7 @@ jobs:
       - name: Deploy Server
         uses: ./.github/composite/deploy-server
         with:
-          VERSION: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
 
   buildAndDeployClients:
     name: Build and deploy gRPC clients

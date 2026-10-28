@@ -72,9 +72,10 @@ seed commands. Staging, production, and CI migration commands use exported
 for example `just migrate down 1`.
 
 Members of `@Patina-Network/dino` apply staging migrations by commenting `/migrate`
-on a pull request. The command applies that pull request's `db/` changes to
-`members-stg` and skips the database when the pull request does not change `db/`.
-It runs only after this command is on the default branch.
+on a pull request. `pat-agent` dispatches the workflow, which reads that comment
+from GitHub and runs the team check from the default branch. It then applies only
+the pull request's `db/` files to `members-stg`, and skips the database when `db/`
+did not change. The command runs only after this workflow is on the default branch.
 
 Cargo uses SQLx offline mode by default, so builds, tests, and linting need no
 running database. After changing SQL or migrations, run `just sqlx-prepare-local`

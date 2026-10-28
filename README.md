@@ -71,6 +71,11 @@ seed commands. Staging, production, and CI migration commands use exported
 `DATABASE_*` variables and never load env files or fall back to example credentials. Migration commands accept arguments,
 for example `just migrate down 1`.
 
+Members of `@Patina-Network/dino` apply staging migrations by commenting `/migrate`
+on a pull request. The command applies that pull request's `db/` changes to
+`members-stg` and skips the database when the pull request does not change `db/`.
+It runs only after this command is on the default branch.
+
 Cargo uses SQLx offline mode by default, so builds, tests, and linting need no
 running database. After changing SQL or migrations, run `just sqlx-prepare-local`
 (with sqlx-cli 0.9.0 installed) and commit `.sqlx`. CI starts a fresh

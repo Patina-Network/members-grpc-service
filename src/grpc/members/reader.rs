@@ -4,14 +4,14 @@ use tonic::Status;
 
 use crate::{
     db::members::MembersRepository,
-    domain::members::{Member as BaseMember, MemberIdentifier},
+    domain::members::{Member as BaseMember, MemberIdentifier, MemberRole as StoredRole},
     grpc::{
         database_status, page::Page, timestamp, validate_discord_id, validate_email,
         validate_member_id,
     },
     proto::members::{
-        GetMemberRequest, ListMembersRequest, Member, admin::SensitiveMember,
-        get_member_request::Identifier,
+        GetMemberRequest, ListMembersRequest, Member, MemberRole as ProtoRole,
+        admin::SensitiveMember, get_member_request::Identifier,
     },
 };
 
@@ -80,6 +80,16 @@ impl<R: MembersRepository, T: From<BaseMember>> MembersReader<R, T> {
     }
 }
 
+impl From<StoredRole> for ProtoRole {
+    fn from(role: StoredRole) -> Self {
+        match role {
+            StoredRole::Board => Self::Board,
+            StoredRole::Mentee => Self::Mentee,
+            StoredRole::Mentor => Self::Mentor,
+        }
+    }
+}
+
 impl From<BaseMember> for Member {
     fn from(member: BaseMember) -> Self {
         Self {
@@ -96,6 +106,7 @@ impl From<BaseMember> for Member {
             instagram_username: member.instagram_username,
             career: member.career,
             industry: member.industry,
+            role: member.role.map(|role| ProtoRole::from(role).into()),
         }
     }
 }
@@ -117,6 +128,7 @@ impl From<BaseMember> for SensitiveMember {
             career: member.career,
             industry: member.industry,
             profile: member.profile,
+            role: member.role.map(|role| ProtoRole::from(role).into()),
         }
     }
 }

@@ -2,8 +2,41 @@ use chrono::Utc;
 use sqlx::PgPool;
 
 use crate::domain::members::{
-    AutocompleteField, CreateMember, Member, MemberIdentifier, OperationOutcome, UpdateMember,
+    AutocompleteField, CreateMember, Member, MemberIdentifier, MemberRole, OperationOutcome,
+    UpdateMember,
 };
+
+impl MemberRole {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Board => "board",
+            Self::Mentee => "mentee",
+            Self::Mentor => "mentor",
+        }
+    }
+}
+
+impl sqlx::Type<sqlx::Postgres> for MemberRole {
+    fn type_info() -> sqlx::postgres::PgTypeInfo {
+        <String as sqlx::Type<sqlx::Postgres>>::type_info()
+    }
+
+    fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
+        <String as sqlx::Type<sqlx::Postgres>>::compatible(ty)
+    }
+}
+
+impl<'r> sqlx::Decode<'r, sqlx::Postgres> for MemberRole {
+    fn decode(value: sqlx::postgres::PgValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
+        let value = <&str as sqlx::Decode<sqlx::Postgres>>::decode(value)?;
+        match value {
+            "board" => Ok(Self::Board),
+            "mentee" => Ok(Self::Mentee),
+            "mentor" => Ok(Self::Mentor),
+            _ => Err(format!("invalid member role: {value}").into()),
+        }
+    }
+}
 
 pub trait MembersRepository: Send + Sync + 'static {
     fn get(
@@ -83,6 +116,7 @@ impl PgMembersRepository {
                 career,
                 industry,
                 profile,
+                role AS "role: MemberRole",
                 "updatedAt" AS updated_at,
                 "archivedAt" AS archived_at
             FROM
@@ -123,7 +157,8 @@ impl PgMembersRepository {
                 career = $10,
                 industry = $11,
                 profile = $12,
-                "updatedAt" = $13
+                role = $13,
+                "updatedAt" = $14
             WHERE
                 id = $1
             RETURNING
@@ -139,6 +174,7 @@ impl PgMembersRepository {
                 career,
                 industry,
                 profile,
+                role AS "role: MemberRole",
                 "updatedAt" AS updated_at,
                 "archivedAt" AS archived_at
             "#,
@@ -154,6 +190,7 @@ impl PgMembersRepository {
             after.career,
             after.industry,
             after.profile,
+            after.role.map(MemberRole::as_str),
             Utc::now()
         )
         .fetch_one(&mut **tx)
@@ -191,6 +228,7 @@ impl PgMembersRepository {
                 career,
                 industry,
                 profile,
+                role AS "role: MemberRole",
                 "updatedAt" AS updated_at,
                 "archivedAt" AS archived_at
             "#,
@@ -217,6 +255,7 @@ impl PgMembersRepository {
                     career,
                     industry,
                     profile,
+                    role AS "role: MemberRole",
                     "updatedAt" AS updated_at,
                     "archivedAt" AS archived_at
                 FROM
@@ -256,6 +295,7 @@ impl MembersRepository for PgMembersRepository {
                         career,
                         industry,
                         profile,
+                        role AS "role: MemberRole",
                         "updatedAt" AS updated_at,
                         "archivedAt" AS archived_at
                     FROM
@@ -285,6 +325,7 @@ impl MembersRepository for PgMembersRepository {
                         career,
                         industry,
                         profile,
+                        role AS "role: MemberRole",
                         "updatedAt" AS updated_at,
                         "archivedAt" AS archived_at
                     FROM
@@ -314,6 +355,7 @@ impl MembersRepository for PgMembersRepository {
                         career,
                         industry,
                         profile,
+                        role AS "role: MemberRole",
                         "updatedAt" AS updated_at,
                         "archivedAt" AS archived_at
                     FROM
@@ -351,6 +393,7 @@ impl MembersRepository for PgMembersRepository {
                 career,
                 industry,
                 profile,
+                role AS "role: MemberRole",
                 "updatedAt" AS updated_at,
                 "archivedAt" AS archived_at
             FROM
@@ -379,9 +422,9 @@ impl MembersRepository for PgMembersRepository {
             r#"
             INSERT INTO "Member"
                 (email, "firstName", "lastName", "joinedAt", "discordId", "discordUsername",
-                 "linkedinUsername", "instagramUsername", career, industry, profile, "updatedAt")
+                 "linkedinUsername", "instagramUsername", career, industry, profile, role, "updatedAt")
             VALUES
-                ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
             RETURNING
                 id,
                 email,
@@ -395,6 +438,7 @@ impl MembersRepository for PgMembersRepository {
                 career,
                 industry,
                 profile,
+                role AS "role: MemberRole",
                 "updatedAt" AS updated_at,
                 "archivedAt" AS archived_at
             "#,
@@ -409,6 +453,7 @@ impl MembersRepository for PgMembersRepository {
             input.career,
             input.industry,
             input.profile,
+            input.role.map(MemberRole::as_str),
             now
         )
         .fetch_one(&self.pool)
@@ -615,6 +660,7 @@ pub mod fake {
                     career: input.career,
                     industry: input.industry,
                     profile: input.profile,
+                    role: input.role,
                     updated_at: DateTime::UNIX_EPOCH,
                     archived_at: None,
                 })

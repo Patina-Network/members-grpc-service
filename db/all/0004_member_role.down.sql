@@ -1,0 +1,1 @@
+ALTER TABLE "Member" DROP COLUMN role;

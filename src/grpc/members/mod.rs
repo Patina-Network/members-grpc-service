@@ -265,6 +265,7 @@ mod tests {
             career: None,
             industry: None,
             profile: Some("admin notes".into()),
+            role: None,
             updated_at: DateTime::UNIX_EPOCH,
             archived_at: (id == 3).then_some(DateTime::UNIX_EPOCH),
         }

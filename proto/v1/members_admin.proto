@@ -44,6 +44,7 @@ message SensitiveMember {
   optional string career = 12;
   optional string industry = 13;
   optional string profile = 14;
+  optional members.MemberRole role = 15;
 }
 
 message GetSensitiveMemberResponse { SensitiveMember member = 1; }
@@ -68,6 +69,7 @@ message CreateMemberRequest {
   optional string career = 9;
   optional string industry = 10;
   optional string profile = 11;
+  optional members.MemberRole role = 12;
 }
 
 message CreateMemberResponse { SensitiveMember member = 1; }
@@ -92,6 +94,8 @@ message UpdateMemberRequest {
   optional string industry = 11;
   // unset = dont change, "" clears it
   optional string profile = 12;
+  // unset = dont change, MEMBER_ROLE_UNSPECIFIED clears it
+  optional members.MemberRole role = 13;
 }
 
 message UpdateMemberResponse { SensitiveMember member = 1; }

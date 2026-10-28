@@ -20,6 +20,13 @@ service MembersService {
   rpc listIndustries(ListIndustriesRequest) returns (ListIndustriesResponse);
 }
 
+enum MemberRole {
+  MEMBER_ROLE_UNSPECIFIED = 0;
+  MEMBER_ROLE_BOARD = 1;
+  MEMBER_ROLE_MENTEE = 2;
+  MEMBER_ROLE_MENTOR = 3;
+}
+
 message Member {
   int32 member_id = 1;
   string email = 2;
@@ -38,6 +45,8 @@ message Member {
   optional string instagram_username = 11;
   optional string career = 12;
   optional string industry = 13;
+  reserved 14;
+  optional MemberRole role = 15;
 }
 
 message GetMemberRequest {

@@ -1,5 +1,12 @@
 use chrono::{DateTime, Utc};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemberRole {
+    Board,
+    Mentee,
+    Mentor,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Member {
     pub id: i32,
@@ -14,6 +21,7 @@ pub struct Member {
     pub career: Option<String>,
     pub industry: Option<String>,
     pub profile: Option<String>,
+    pub role: Option<MemberRole>,
     pub updated_at: DateTime<Utc>,
     pub archived_at: Option<DateTime<Utc>>,
 }
@@ -42,6 +50,7 @@ pub struct CreateMember {
     pub career: Option<String>,
     pub industry: Option<String>,
     pub profile: Option<String>,
+    pub role: Option<MemberRole>,
 }
 
 pub struct UpdateMember {
@@ -64,6 +73,8 @@ pub struct UpdateMember {
     pub industry: Option<Option<String>>,
     /// `None` = dont change, `Some(None)` clears it
     pub profile: Option<Option<String>>,
+    /// `None` = dont change, `Some(None)` clears it
+    pub role: Option<Option<MemberRole>>,
 }
 
 #[derive(Clone)]
@@ -110,6 +121,9 @@ impl UpdateMember {
         if let Some(profile) = self.profile {
             after.profile = profile;
         }
+        if let Some(role) = self.role {
+            after.role = role;
+        }
 
         let discord_touched = self.discord_id.is_some() || self.discord_username.is_some();
         if let Some(discord_id) = self.discord_id {
@@ -154,6 +168,7 @@ impl UpsertWrite {
             career: member.career.map(Some),
             industry: member.industry.map(Some),
             profile: member.profile.map(Some),
+            role: member.role.map(Some),
         })
     }
 }
@@ -176,6 +191,7 @@ mod tests {
             career: None,
             industry: None,
             profile: None,
+            role: None,
             updated_at: DateTime::UNIX_EPOCH,
             archived_at: None,
         }
@@ -194,6 +210,7 @@ mod tests {
             career: None,
             industry: None,
             profile: None,
+            role: None,
         }
     }
 
@@ -214,6 +231,7 @@ mod tests {
             career: None,
             industry: None,
             profile: None,
+            role: None,
         }
     }
 
@@ -303,11 +321,13 @@ mod tests {
         before.linkedin_username = Some("old".into());
         before.career = Some("Engineer".into());
         before.profile = Some("notes".into());
+        before.role = Some(MemberRole::Mentee);
 
         let after = UpdateMember {
             linkedin_username: Some(None),
             instagram_username: Some(Some("insta".into())),
             profile: Some(Some("new notes".into())),
+            role: Some(None),
             ..update(None, None)
         }
         .apply(&before)
@@ -317,6 +337,7 @@ mod tests {
         assert_eq!(after.instagram_username.as_deref(), Some("insta"));
         assert_eq!(after.career.as_deref(), Some("Engineer"));
         assert_eq!(after.profile.as_deref(), Some("new notes"));
+        assert_eq!(after.role, None);
     }
 
     #[test]
@@ -341,6 +362,7 @@ mod tests {
                 career: None,
                 industry: None,
                 profile: None,
+                role: None,
             }) if email == "a@example.org" && first_name == "First" && last_name == "Last"
         ));
 

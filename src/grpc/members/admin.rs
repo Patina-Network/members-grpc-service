@@ -7,14 +7,14 @@ use tonic::{Request, Response, Status};
 use crate::{
     db::members::MembersRepository,
     domain::members::{
-        CreateMember, Member as StoredMember, MemberIdentifier, OperationOutcome, UpdateMember,
-        UpsertWrite,
+        CreateMember, Member as StoredMember, MemberIdentifier, MemberRole, OperationOutcome,
+        UpdateMember, UpsertWrite,
     },
     grpc::{
         database_status, parse_timestamp, validate_discord_id, validate_email, validate_member_id,
     },
     proto::members::{
-        GetMemberRequest, ListMembersRequest,
+        GetMemberRequest, ListMembersRequest, MemberRole as ProtoRole,
         admin::{
             ArchiveMemberRequest, ArchiveMemberResponse, BulkMemberOperationsRequest,
             BulkMemberOperationsResponse, CreateMemberRequest, CreateMemberResponse,
@@ -163,6 +163,16 @@ fn parse_joined_at(value: Option<Timestamp>) -> Result<Option<DateTime<Utc>>, St
         .transpose()
 }
 
+fn parse_role(role: i32) -> Result<Option<MemberRole>, Status> {
+    match ProtoRole::try_from(role) {
+        Ok(ProtoRole::Unspecified) => Ok(None),
+        Ok(ProtoRole::Board) => Ok(Some(MemberRole::Board)),
+        Ok(ProtoRole::Mentee) => Ok(Some(MemberRole::Mentee)),
+        Ok(ProtoRole::Mentor) => Ok(Some(MemberRole::Mentor)),
+        Err(_) => Err(Status::invalid_argument("role is invalid")),
+    }
+}
+
 impl TryFrom<CreateMemberRequest> for CreateMember {
     type Error = Status;
 
@@ -205,6 +215,7 @@ impl TryFrom<CreateMemberRequest> for CreateMember {
             career: input.career,
             industry: input.industry,
             profile: input.profile,
+            role: input.role.map(parse_role).transpose()?.flatten(),
         })
     }
 }
@@ -241,6 +252,7 @@ impl TryFrom<UpdateMemberRequest> for UpdateMember {
         let career = clearable(input.career, |value| required(value, "career"))?;
         let industry = clearable(input.industry, |value| required(value, "industry"))?;
         let profile = clearable(input.profile, |value| required(value, "profile"))?;
+        let role = input.role.map(parse_role).transpose()?;
 
         Ok(Self {
             member_id: input.member_id,
@@ -255,6 +267,7 @@ impl TryFrom<UpdateMemberRequest> for UpdateMember {
             career,
             industry,
             profile,
+            role,
         })
     }
 }
@@ -415,6 +428,7 @@ fn changed_fields(before: &StoredMember, after: &StoredMember) -> prost_types::F
         ("career", before.career != after.career),
         ("industry", before.industry != after.industry),
         ("profile", before.profile != after.profile),
+        ("role", before.role != after.role),
     ];
 
     prost_types::FieldMask {
@@ -822,6 +836,123 @@ mod tests {
     }
 
     #[test]
+    fn role_can_be_omitted_set_or_cleared() {
+        use crate::domain::members::MemberRole;
+        use crate::proto::members::MemberRole as ProtoRole;
+
+        let created = CreateMember::try_from(input("a@example.org")).unwrap();
+        assert_eq!(created.role, None);
+
+        let created = CreateMember::try_from(CreateMemberRequest {
+            role: Some(ProtoRole::Mentee as i32),
+            ..input("a@example.org")
+        })
+        .unwrap();
+        assert_eq!(created.role, Some(MemberRole::Mentee));
+
+        let created = CreateMember::try_from(CreateMemberRequest {
+            role: Some(ProtoRole::Unspecified as i32),
+            ..input("a@example.org")
+        })
+        .unwrap();
+        assert_eq!(created.role, None);
+
+        let Err(error) = CreateMember::try_from(CreateMemberRequest {
+            role: Some(99),
+            ..input("a@example.org")
+        }) else {
+            panic!("expected an invalid role to be rejected");
+        };
+        assert_eq!(error.code(), Code::InvalidArgument);
+        assert_eq!(error.message(), "role is invalid");
+
+        let unchanged = UpdateMember::try_from(UpdateMemberRequest {
+            member_id: 1,
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(unchanged.role, None);
+
+        let cleared = UpdateMember::try_from(UpdateMemberRequest {
+            member_id: 1,
+            role: Some(ProtoRole::Unspecified as i32),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(cleared.role, Some(None));
+
+        let set = UpdateMember::try_from(UpdateMemberRequest {
+            member_id: 1,
+            role: Some(ProtoRole::Board as i32),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(set.role, Some(Some(MemberRole::Board)));
+    }
+
+    #[test]
+    fn roles_survive_writes_and_both_response_views() {
+        for (proto, role) in [
+            (ProtoRole::Board, MemberRole::Board),
+            (ProtoRole::Mentee, MemberRole::Mentee),
+            (ProtoRole::Mentor, MemberRole::Mentor),
+        ] {
+            let created = CreateMember::try_from(CreateMemberRequest {
+                role: Some(proto.into()),
+                ..input("a@example.org")
+            })
+            .unwrap();
+            assert_eq!(created.role, Some(role));
+
+            let UpsertWrite::Update(update) = UpsertWrite::new(created, Some(1)) else {
+                panic!("expected an update for an existing member");
+            };
+            assert_eq!(update.role, Some(Some(role)));
+
+            let before = stored(1);
+            let after = UpdateMember::try_from(UpdateMemberRequest {
+                member_id: 1,
+                role: Some(proto.into()),
+                ..Default::default()
+            })
+            .unwrap()
+            .apply(&before)
+            .unwrap();
+            assert_eq!(after.role, Some(role));
+            assert_eq!(changed_fields(&before, &after).paths, ["role"]);
+            let public = crate::proto::members::Member::from(after.clone());
+            let sensitive = SensitiveMember::from(after.clone());
+            assert_eq!(public.role, Some(proto.into()));
+            assert_eq!(sensitive.role, public.role);
+
+            for (requested, expected) in [(None, Some(role)), (Some(0), None)] {
+                let updated = UpdateMember::try_from(UpdateMemberRequest {
+                    member_id: 1,
+                    role: requested,
+                    ..Default::default()
+                })
+                .unwrap()
+                .apply(&after)
+                .unwrap();
+                assert_eq!(updated.role, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn updates_reject_unknown_roles() {
+        let Err(error) = UpdateMember::try_from(UpdateMemberRequest {
+            member_id: 1,
+            role: Some(99),
+            ..Default::default()
+        }) else {
+            panic!("expected an invalid role to be rejected");
+        };
+        assert_eq!(error.code(), Code::InvalidArgument);
+        assert_eq!(error.message(), "role is invalid");
+    }
+
+    #[test]
     fn changed_fields_lists_only_differing_fields() {
         let before = StoredMember {
             discord_id: Some("1".into()),
@@ -989,6 +1120,7 @@ mod tests {
             career: Some("Engineer".into()),
             industry: None,
             profile: Some(format!("notes {id}")),
+            role: None,
             updated_at: DateTime::UNIX_EPOCH,
             archived_at: (id == 2).then_some(DateTime::UNIX_EPOCH),
         }

@@ -188,6 +188,7 @@ jobs:
         uses: tahminator/pipeline/actions/setup@aa4f2ffcca89a9dcad96c1eac1e57b5a533f8c26 # 1.0.100
         with:
           LINT_CI: true
+          INSTALL_PROTO_DEPENDENCIES: true
           INSTALL_JUST: true
           INSTALL_MIGRATE: "true"
           CARGO_PACKAGES: sqlx-cli@0.9.0 --no-default-features --features postgres,rustls

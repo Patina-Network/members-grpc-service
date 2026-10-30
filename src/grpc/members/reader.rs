@@ -80,13 +80,14 @@ impl<R: MembersRepository, T: From<BaseMember>> MembersReader<R, T> {
     }
 }
 
-impl From<StoredRole> for ProtoRole {
+impl From<StoredRole> for i32 {
     fn from(role: StoredRole) -> Self {
-        match role {
-            StoredRole::Board => Self::Board,
-            StoredRole::Mentee => Self::Mentee,
-            StoredRole::Mentor => Self::Mentor,
-        }
+        let role = match role {
+            StoredRole::Board => ProtoRole::Board,
+            StoredRole::Mentee => ProtoRole::Mentee,
+            StoredRole::Mentor => ProtoRole::Mentor,
+        };
+        role as i32
     }
 }
 
@@ -106,7 +107,7 @@ impl From<BaseMember> for Member {
             instagram_username: member.instagram_username,
             career: member.career,
             industry: member.industry,
-            role: member.role.map(|role| ProtoRole::from(role).into()),
+            role: member.role.map(|r| r.into()),
         }
     }
 }
@@ -128,7 +129,7 @@ impl From<BaseMember> for SensitiveMember {
             career: member.career,
             industry: member.industry,
             profile: member.profile,
-            role: member.role.map(|role| ProtoRole::from(role).into()),
+            role: member.role.map(Into::into),
         }
     }
 }

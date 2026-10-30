@@ -6,38 +6,6 @@ use crate::domain::members::{
     UpdateMember,
 };
 
-impl MemberRole {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Board => "board",
-            Self::Mentee => "mentee",
-            Self::Mentor => "mentor",
-        }
-    }
-}
-
-impl sqlx::Type<sqlx::Postgres> for MemberRole {
-    fn type_info() -> sqlx::postgres::PgTypeInfo {
-        <String as sqlx::Type<sqlx::Postgres>>::type_info()
-    }
-
-    fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
-        <String as sqlx::Type<sqlx::Postgres>>::compatible(ty)
-    }
-}
-
-impl<'r> sqlx::Decode<'r, sqlx::Postgres> for MemberRole {
-    fn decode(value: sqlx::postgres::PgValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
-        let value = <&str as sqlx::Decode<sqlx::Postgres>>::decode(value)?;
-        match value {
-            "board" => Ok(Self::Board),
-            "mentee" => Ok(Self::Mentee),
-            "mentor" => Ok(Self::Mentor),
-            _ => Err(format!("invalid member role: {value}").into()),
-        }
-    }
-}
-
 pub trait MembersRepository: Send + Sync + 'static {
     fn get(
         &self,
@@ -190,7 +158,7 @@ impl PgMembersRepository {
             after.career,
             after.industry,
             after.profile,
-            after.role.map(MemberRole::as_str),
+            after.role as Option<MemberRole>,
             Utc::now()
         )
         .fetch_one(&mut **tx)
@@ -453,7 +421,7 @@ impl MembersRepository for PgMembersRepository {
             input.career,
             input.industry,
             input.profile,
-            input.role.map(MemberRole::as_str),
+            input.role as Option<MemberRole>,
             now
         )
         .fetch_one(&self.pool)

@@ -29,8 +29,6 @@ concurrency:
 
 permissions:
   contents: read
-  issues: read
-  pull-requests: read
 
 jobs:
   migrate:
@@ -39,10 +37,9 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
-      - name: Checkout trusted code
+      - name: Checkout pull request
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -50,117 +47,23 @@ jobs:
         uses: tahminator/pipeline/actions/setup@aa4f2ffcca89a9dcad96c1eac1e57b5a533f8c26 # 1.0.100
         with:
           LINT_CI: true
+          INSTALL_JUST: true
           INSTALL_MIGRATE: "true"
-
-      - name: Resolve the slash comment
-        id: comment
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
-        env:
-          PR_ID: ${{ inputs.prId }}
-          COMMENT_ID: ${{ inputs.comment-id }}
-        with:
-          script: |
-            const prId = Number(process.env.PR_ID);
-            const commentId = Number(process.env.COMMENT_ID);
-            if (!Number.isInteger(prId) || prId <= 0 || !Number.isInteger(commentId) || commentId <= 0) {
-              core.setFailed("Invalid pull request or comment id");
-              return;
-            }
-            const { data: comment } = await github.rest.issues.getComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              comment_id: commentId,
-            });
-            if (!String(comment.issue_url || "").endsWith(`/issues/${prId}`)) {
-              core.setFailed("Comment is not on this pull request");
-              return;
-            }
-            const command = String(comment.body || "").trim().split(/\s+/)[0];
-            if (command !== "/migrate") {
-              core.setFailed("Comment is not a /migrate command");
-              return;
-            }
-            const login = comment.user && comment.user.login;
-            if (!login) {
-              core.setFailed("Comment has no author");
-              return;
-            }
-            const { data: pr } = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: prId,
-            });
-            const fullName = pr.head.repo && pr.head.repo.full_name;
-            if (pr.state !== "open" || fullName !== `${context.repo.owner}/${context.repo.repo}`) {
-              core.setFailed("Pull request must be open and from this repository");
-              return;
-            }
-            if (!/^[0-9a-f]{40}$/.test(pr.head.sha)) {
-              core.setFailed("Pull request head is not a commit SHA");
-              return;
-            }
-            core.setOutput("author", login);
-            core.setOutput("sha", pr.head.sha);
-
-      - name: Authorize and detect database changes
-        id: gate
-        env:
-          AUTHOR: ${{ steps.comment.outputs.author }}
-          PR_SHA: ${{ steps.comment.outputs.sha }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          _GITHUB_APP_APP_ID: ${{ secrets._GITHUB_APP_APP_ID }}
-          _GITHUB_APP_INSTALLATION_ID: ${{ secrets._GITHUB_APP_INSTALLATION_ID }}
-          _GITHUB_APP_PEM_CONTENT: ${{ secrets._GITHUB_APP_PEM_CONTENT }}
-        run: bun run .github/scripts/src/migrate-staging/index.ts
-
-      - name: Checkout pull request database files
-        if: steps.gate.outputs.migrate == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ steps.comment.outputs.sha }}
-          path: pr
-          persist-credentials: false
-          sparse-checkout: db
-          sparse-checkout-cone-mode: true
-
-      - name: Connect to the VPN
-        if: steps.gate.outputs.migrate == 'true'
-        uses: tahminator/pipeline/actions/setup@aa4f2ffcca89a9dcad96c1eac1e57b5a533f8c26 # 1.0.100
-        with:
           HEADSCALE_ADDRESS: ${{ secrets.HEADSCALE_ADDRESS }}
           HEADSCALE_USER: ${{ secrets.HEADSCALE_USER }}
           HEADSCALE_PREAUTHKEY: ${{ secrets.HEADSCALE_PREAUTHKEY }}
 
-      - name: Apply staging migrations
-        id: apply
-        if: steps.gate.outputs.migrate == 'true'
+      - name: Migrate staging database
         env:
+          AUTHOR: ${{ inputs.author }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          _GITHUB_APP_APP_ID: ${{ secrets._GITHUB_APP_APP_ID }}
+          _GITHUB_APP_INSTALLATION_ID: ${{ secrets._GITHUB_APP_INSTALLATION_ID }}
+          _GITHUB_APP_PEM_CONTENT: ${{ secrets._GITHUB_APP_PEM_CONTENT }}
           DATABASE_HOST: ${{ secrets.STAGING_MIGRATION_DATABASE_HOST }}
           DATABASE_PORT: ${{ secrets.STAGING_MIGRATION_DATABASE_PORT }}
           DATABASE_NAME: ${{ secrets.STAGING_MIGRATION_DATABASE_NAME }}
           DATABASE_USER: ${{ secrets.STAGING_MIGRATION_DATABASE_USER }}
           DATABASE_PASSWORD: ${{ secrets.STAGING_MIGRATION_DATABASE_PASSWORD }}
           DATABASE_SSLMODE: require
-          MIGRATIONS_DIR: ${{ github.workspace }}/pr/db/all
-        run: |
-          set -euo pipefail
-          if [[ ! -d "$MIGRATIONS_DIR" ]]; then
-            echo "Pull request is missing db/all" >&2
-            exit 1
-          fi
-          PGHOST="$DATABASE_HOST" PGPORT="$DATABASE_PORT" \
-            PGDATABASE="$DATABASE_NAME" PGUSER="$DATABASE_USER" \
-            PGPASSWORD="$DATABASE_PASSWORD" PGSSLMODE="${DATABASE_SSLMODE:-require}" \
-            migrate -source "file://${MIGRATIONS_DIR}" -database 'pgx5:///?x-migrations-table=schema_migrations' -verbose up
-
-      - name: Report migration result
-        if: always() && steps.gate.outputs.migrate == 'true'
-        env:
-          ACTION: report
-          RESULT: ${{ steps.apply.outcome }}
-          CHECK_RUN_ID: ${{ steps.gate.outputs.check_run_id }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          _GITHUB_APP_APP_ID: ${{ secrets._GITHUB_APP_APP_ID }}
-          _GITHUB_APP_INSTALLATION_ID: ${{ secrets._GITHUB_APP_INSTALLATION_ID }}
-          _GITHUB_APP_PEM_CONTENT: ${{ secrets._GITHUB_APP_PEM_CONTENT }}
-        run: bun run .github/scripts/src/migrate-staging/index.ts
+        run: bun run .github/scripts/src/migrate-staging --author="$AUTHOR" --runUrl="$RUN_URL"

@@ -195,7 +195,7 @@ jobs:
           SECRETS: ${{ toJSON(secrets) }}
 
       - name: Prepare SQLx metadata
-        run: bun run .github/scripts/src/prepare-sqlx.ts
+        run: bun run .github/scripts/src/prepare-sqlx
 
       - name: Build image
         uses: ./.github/composite/build-server

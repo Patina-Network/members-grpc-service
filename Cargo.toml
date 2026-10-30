@@ -1,6 +1,6 @@
 [package]
 name = "members-grpc-service"
-version = "1.0.0"
+version = "1.0.8"
 edition = "2024"
 rust-version = "1.94"
 

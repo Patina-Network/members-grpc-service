@@ -83,7 +83,7 @@ jobs:
           CARGO_PACKAGES: sqlx-cli@0.9.0 --no-default-features --features postgres,rustls
 
       - name: Prepare SQLx metadata
-        run: bun run .github/scripts/src/prepare-sqlx.ts
+        run: bun run .github/scripts/src/prepare-sqlx
 
       - name: Run Tests
         run: cargo test
@@ -126,7 +126,7 @@ jobs:
           CARGO_PACKAGES: sqlx-cli@0.9.0 --no-default-features --features postgres,rustls
 
       - name: Prepare SQLx metadata
-        run: bun run .github/scripts/src/prepare-sqlx.ts
+        run: bun run .github/scripts/src/prepare-sqlx
 
       - name: Run Tests
         run: cargo test

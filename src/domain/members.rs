@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
+#[sqlx(type_name = "\"MemberRole\"", rename_all = "lowercase")]
 pub enum MemberRole {
     Board,
     Mentee,

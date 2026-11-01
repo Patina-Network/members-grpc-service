@@ -39,6 +39,7 @@ async function main() {
     prId,
     owner: GITHUB_OWNER,
     repository: GITHUB_REPOSITORY,
+    key: "grpc-clients-build",
     message: `The gRPC client packages have been uploaded to ${PACKAGE_REGISTRY_URL} under the following version(s):
 
 - \`${betaVersion}\`

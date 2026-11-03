@@ -8,7 +8,7 @@ COPY Cargo.toml Cargo.lock build.rs ./
 COPY proto ./proto
 COPY src ./src
 COPY .sqlx ./.sqlx
-COPY .cargo ./.cargo
+ENV SQLX_OFFLINE=true
 
 RUN cargo build --release --locked
 

@@ -34,6 +34,20 @@ enum MemberRole {
   MEMBER_ROLE_MENTOR = 3;
 }
 
+enum CommunicationMethod {
+  COMMUNICATION_METHOD_UNSPECIFIED = 0;
+  COMMUNICATION_METHOD_EMAIL = 1;
+  COMMUNICATION_METHOD_PHONE_NUMBER = 2;
+  COMMUNICATION_METHOD_DISCORD = 3;
+  COMMUNICATION_METHOD_INSTAGRAM = 4;
+  COMMUNICATION_METHOD_LINKED_IN = 5;
+}
+
+// Unordered set of unique communication methods.
+message PreferredCommunications {
+  repeated CommunicationMethod values = 1;
+}
+
 message Member {
   int32 member_id = 1;
   string email = 2;
@@ -56,6 +70,8 @@ message Member {
   optional MemberRole role = 15;
   optional string school = 16;
   optional string grad_date = 17;
+  // Absent when no preferences are stored.
+  PreferredCommunications preferred_communications = 18;
 }
 
 message GetMemberRequest {

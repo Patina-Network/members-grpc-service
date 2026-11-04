@@ -8,6 +8,8 @@ option java_package = "org.patinanetwork.grpc.members.v1";
 option java_multiple_files = true;
 
 service MembersService {
+  rpc listSchools(ListSchoolsRequest) returns (ListSchoolsResponse);
+  rpc listGradDates(ListGradDatesRequest) returns (ListGradDatesResponse);
   rpc getMember(GetMemberRequest) returns (GetMemberResponse);
 
   rpc listMembers(ListMembersRequest) returns (ListMembersResponse);
@@ -47,6 +49,8 @@ message Member {
   optional string industry = 13;
   reserved 14;
   optional MemberRole role = 15;
+  optional string school = 16;
+  optional string grad_date = 17;
 }
 
 message GetMemberRequest {
@@ -85,3 +89,17 @@ message ListIndustriesRequest {
 }
 
 message ListIndustriesResponse { repeated string industries = 1; }
+
+message ListSchoolsRequest {
+  string query = 1;
+  // default of 10, clamps at 50
+  uint32 limit = 2;
+}
+message ListSchoolsResponse { repeated string schools = 1; }
+
+message ListGradDatesRequest {
+  string query = 1;
+  // default of 10, clamps at 50
+  uint32 limit = 2;
+}
+message ListGradDatesResponse { repeated string grad_dates = 1; }

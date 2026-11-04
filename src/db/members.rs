@@ -83,6 +83,8 @@ impl PgMembersRepository {
                 "instagramUsername" AS instagram_username,
                 career,
                 industry,
+                school,
+                grad_date,
                 profile,
                 role AS "role: MemberRole",
                 "updatedAt" AS updated_at,
@@ -126,7 +128,9 @@ impl PgMembersRepository {
                 industry = $11,
                 profile = $12,
                 role = $13,
-                "updatedAt" = $14
+                "updatedAt" = $14,
+                school = $15,
+                grad_date = $16
             WHERE
                 id = $1
             RETURNING
@@ -141,6 +145,8 @@ impl PgMembersRepository {
                 "instagramUsername" AS instagram_username,
                 career,
                 industry,
+                school,
+                grad_date,
                 profile,
                 role AS "role: MemberRole",
                 "updatedAt" AS updated_at,
@@ -159,7 +165,9 @@ impl PgMembersRepository {
             after.industry,
             after.profile,
             after.role as Option<MemberRole>,
-            Utc::now()
+            Utc::now(),
+            after.school,
+            after.grad_date
         )
         .fetch_one(&mut **tx)
         .await?;
@@ -195,6 +203,8 @@ impl PgMembersRepository {
                 "instagramUsername" AS instagram_username,
                 career,
                 industry,
+                school,
+                grad_date,
                 profile,
                 role AS "role: MemberRole",
                 "updatedAt" AS updated_at,
@@ -222,6 +232,8 @@ impl PgMembersRepository {
                     "instagramUsername" AS instagram_username,
                     career,
                     industry,
+                    school,
+                    grad_date,
                     profile,
                     role AS "role: MemberRole",
                     "updatedAt" AS updated_at,
@@ -262,6 +274,8 @@ impl MembersRepository for PgMembersRepository {
                         "instagramUsername" AS instagram_username,
                         career,
                         industry,
+                        school,
+                        grad_date,
                         profile,
                         role AS "role: MemberRole",
                         "updatedAt" AS updated_at,
@@ -292,6 +306,8 @@ impl MembersRepository for PgMembersRepository {
                         "instagramUsername" AS instagram_username,
                         career,
                         industry,
+                        school,
+                        grad_date,
                         profile,
                         role AS "role: MemberRole",
                         "updatedAt" AS updated_at,
@@ -322,6 +338,8 @@ impl MembersRepository for PgMembersRepository {
                         "instagramUsername" AS instagram_username,
                         career,
                         industry,
+                        school,
+                        grad_date,
                         profile,
                         role AS "role: MemberRole",
                         "updatedAt" AS updated_at,
@@ -360,6 +378,8 @@ impl MembersRepository for PgMembersRepository {
                 "instagramUsername" AS instagram_username,
                 career,
                 industry,
+                school,
+                grad_date,
                 profile,
                 role AS "role: MemberRole",
                 "updatedAt" AS updated_at,
@@ -390,9 +410,9 @@ impl MembersRepository for PgMembersRepository {
             r#"
             INSERT INTO "Member"
                 (email, "firstName", "lastName", "joinedAt", "discordId", "discordUsername",
-                 "linkedinUsername", "instagramUsername", career, industry, profile, role, "updatedAt")
+                 "linkedinUsername", "instagramUsername", career, industry, profile, role, "updatedAt", school, grad_date)
             VALUES
-                ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
             RETURNING
                 id,
                 email,
@@ -405,6 +425,8 @@ impl MembersRepository for PgMembersRepository {
                 "instagramUsername" AS instagram_username,
                 career,
                 industry,
+                school,
+                grad_date,
                 profile,
                 role AS "role: MemberRole",
                 "updatedAt" AS updated_at,
@@ -422,7 +444,9 @@ impl MembersRepository for PgMembersRepository {
             input.industry,
             input.profile,
             input.role as Option<MemberRole>,
-            now
+            now,
+            input.school,
+            input.grad_date
         )
         .fetch_one(&self.pool)
         .await
@@ -505,6 +529,54 @@ impl MembersRepository for PgMembersRepository {
                     ORDER BY
                         COUNT(*) DESC,
                         industry ASC
+                    LIMIT
+                        $2
+                    "#,
+                    pattern,
+                    limit
+                )
+                .fetch_all(&self.pool)
+                .await
+            }
+            AutocompleteField::School => {
+                sqlx::query_scalar!(
+                    r#"
+                    SELECT
+                        school AS "school!"
+                    FROM
+                        "Member"
+                    WHERE
+                        school IS NOT NULL
+                        AND school ILIKE $1
+                    GROUP BY
+                        school
+                    ORDER BY
+                        COUNT(*) DESC,
+                        school ASC
+                    LIMIT
+                        $2
+                    "#,
+                    pattern,
+                    limit
+                )
+                .fetch_all(&self.pool)
+                .await
+            }
+            AutocompleteField::GradDate => {
+                sqlx::query_scalar!(
+                    r#"
+                    SELECT
+                        grad_date AS "grad_date!"
+                    FROM
+                        "Member"
+                    WHERE
+                        grad_date IS NOT NULL
+                        AND grad_date ILIKE $1
+                    GROUP BY
+                        grad_date
+                    ORDER BY
+                        COUNT(*) DESC,
+                        grad_date ASC
                     LIMIT
                         $2
                     "#,
@@ -627,6 +699,8 @@ pub mod fake {
                     instagram_username: input.instagram_username,
                     career: input.career,
                     industry: input.industry,
+                    school: input.school,
+                    grad_date: input.grad_date,
                     profile: input.profile,
                     role: input.role,
                     updated_at: DateTime::UNIX_EPOCH,
@@ -692,6 +766,8 @@ pub mod fake {
                 for value in members.iter().filter_map(|member| match field {
                     AutocompleteField::Career => member.career.as_deref(),
                     AutocompleteField::Industry => member.industry.as_deref(),
+                    AutocompleteField::School => member.school.as_deref(),
+                    AutocompleteField::GradDate => member.grad_date.as_deref(),
                 }) {
                     if value.to_lowercase().contains(&query) {
                         *counts.entry(value).or_default() += 1;

@@ -21,6 +21,8 @@ pub struct Member {
     pub instagram_username: Option<String>,
     pub career: Option<String>,
     pub industry: Option<String>,
+    pub school: Option<String>,
+    pub grad_date: Option<String>,
     pub profile: Option<String>,
     pub role: Option<MemberRole>,
     pub updated_at: DateTime<Utc>,
@@ -37,6 +39,8 @@ pub enum MemberIdentifier {
 pub enum AutocompleteField {
     Career,
     Industry,
+    School,
+    GradDate,
 }
 
 pub struct CreateMember {
@@ -50,6 +54,8 @@ pub struct CreateMember {
     pub instagram_username: Option<String>,
     pub career: Option<String>,
     pub industry: Option<String>,
+    pub school: Option<String>,
+    pub grad_date: Option<String>,
     pub profile: Option<String>,
     pub role: Option<MemberRole>,
 }
@@ -72,6 +78,8 @@ pub struct UpdateMember {
     pub career: Option<Option<String>>,
     /// `None` = dont change, `Some(None)` clears it
     pub industry: Option<Option<String>>,
+    pub school: Option<Option<String>>,
+    pub grad_date: Option<Option<String>>,
     /// `None` = dont change, `Some(None)` clears it
     pub profile: Option<Option<String>>,
     /// `None` = dont change, `Some(None)` clears it
@@ -118,6 +126,12 @@ impl UpdateMember {
         }
         if let Some(industry) = self.industry {
             after.industry = industry;
+        }
+        if let Some(school) = self.school {
+            after.school = school;
+        }
+        if let Some(grad_date) = self.grad_date {
+            after.grad_date = grad_date;
         }
         if let Some(profile) = self.profile {
             after.profile = profile;
@@ -168,6 +182,8 @@ impl UpsertWrite {
             instagram_username: member.instagram_username.map(Some),
             career: member.career.map(Some),
             industry: member.industry.map(Some),
+            school: member.school.map(Some),
+            grad_date: member.grad_date.map(Some),
             profile: member.profile.map(Some),
             role: member.role.map(Some),
         })
@@ -191,6 +207,8 @@ mod tests {
             instagram_username: None,
             career: None,
             industry: None,
+            school: None,
+            grad_date: None,
             profile: None,
             role: None,
             updated_at: DateTime::UNIX_EPOCH,
@@ -210,6 +228,8 @@ mod tests {
             instagram_username: None,
             career: None,
             industry: None,
+            school: None,
+            grad_date: None,
             profile: None,
             role: None,
         }
@@ -231,6 +251,8 @@ mod tests {
             instagram_username: None,
             career: None,
             industry: None,
+            school: None,
+            grad_date: None,
             profile: None,
             role: None,
         }
@@ -362,6 +384,8 @@ mod tests {
                 instagram_username: None,
                 career: None,
                 industry: None,
+                school: None,
+                grad_date: None,
                 profile: None,
                 role: None,
             }) if email == "a@example.org" && first_name == "First" && last_name == "Last"

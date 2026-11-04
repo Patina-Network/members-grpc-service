@@ -9,8 +9,9 @@ use crate::{
     grpc::database_status,
     proto::members::{
         GetMemberRequest, GetMemberResponse, ListCareersRequest, ListCareersResponse,
-        ListIndustriesRequest, ListIndustriesResponse, ListMembersRequest, ListMembersResponse,
-        Member, members_service_server,
+        ListGradDatesRequest, ListGradDatesResponse, ListIndustriesRequest, ListIndustriesResponse,
+        ListMembersRequest, ListMembersResponse, ListSchoolsRequest, ListSchoolsResponse, Member,
+        members_service_server,
     },
 };
 
@@ -105,6 +106,28 @@ impl<R: MembersRepository> members_service_server::MembersService for MembersSer
 
         Ok(ListIndustriesResponse { industries }.into())
     }
+    async fn list_schools(
+        &self,
+        request: Request<ListSchoolsRequest>,
+    ) -> Result<Response<ListSchoolsResponse>, Status> {
+        let request = request.into_inner();
+        let schools = self
+            .autocomplete(AutocompleteField::School, request.query, request.limit)
+            .await?;
+
+        Ok(ListSchoolsResponse { schools }.into())
+    }
+    async fn list_grad_dates(
+        &self,
+        request: Request<ListGradDatesRequest>,
+    ) -> Result<Response<ListGradDatesResponse>, Status> {
+        let request = request.into_inner();
+        let grad_dates = self
+            .autocomplete(AutocompleteField::GradDate, request.query, request.limit)
+            .await?;
+
+        Ok(ListGradDatesResponse { grad_dates }.into())
+    }
 }
 
 #[cfg(test)]
@@ -121,6 +144,39 @@ mod tests {
 
     fn disconnected_service() -> MembersService<FakeMembersRepository> {
         MembersService::new(FakeMembersRepository::Unavailable)
+    }
+
+    #[tokio::test]
+    async fn education_autocomplete_matches_and_ranks_stored_text() {
+        let mut members: Vec<_> = (1..=3).map(stored).collect();
+        for (member, value) in members
+            .iter_mut()
+            .zip(["Spring 2028", "Spring 2028", "Spring 2029"])
+        {
+            member.school = Some(value.into());
+            member.grad_date = Some(value.into());
+        }
+        let service = MembersService::new(FakeMembersRepository::Stored(members));
+        let schools = service
+            .list_schools(Request::new(ListSchoolsRequest {
+                query: "SPRING".into(),
+                limit: 1,
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .schools;
+        assert_eq!(schools, ["Spring 2028"]);
+        let dates = service
+            .list_grad_dates(Request::new(ListGradDatesRequest {
+                query: "spring".into(),
+                limit: 0,
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .grad_dates;
+        assert_eq!(dates, ["Spring 2028", "Spring 2029"]);
     }
 
     #[tokio::test]
@@ -264,6 +320,8 @@ mod tests {
             instagram_username: None,
             career: None,
             industry: None,
+            school: Some("Example University".into()),
+            grad_date: Some("Spring 2028".into()),
             profile: Some("admin notes".into()),
             role: None,
             updated_at: DateTime::UNIX_EPOCH,
@@ -291,6 +349,8 @@ mod tests {
                 .member
                 .unwrap();
 
+            assert_eq!(member.school.as_deref(), Some("Example University"));
+            assert_eq!(member.grad_date.as_deref(), Some("Spring 2028"));
             assert_eq!(member.member_id, 2);
             assert_eq!(member.discord_username.as_deref(), Some("member2"));
             assert_eq!(member.joined_at, Some(prost_types::Timestamp::default()));
@@ -321,6 +381,10 @@ mod tests {
                     .unwrap()
                     .into_inner();
 
+                for member in &page.members {
+                    assert_eq!(member.school.as_deref(), Some("Example University"));
+                    assert_eq!(member.grad_date.as_deref(), Some("Spring 2028"));
+                }
                 ids.extend(page.members.iter().map(|member| member.member_id));
                 page_token = page.next_page_token;
 

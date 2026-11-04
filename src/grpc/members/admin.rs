@@ -214,6 +214,8 @@ impl TryFrom<CreateMemberRequest> for CreateMember {
             instagram_username: input.instagram_username,
             career: input.career,
             industry: input.industry,
+            school: input.school,
+            grad_date: input.grad_date,
             profile: input.profile,
             role: input.role.map(parse_role).transpose()?.flatten(),
         })
@@ -266,6 +268,8 @@ impl TryFrom<UpdateMemberRequest> for UpdateMember {
             instagram_username,
             career,
             industry,
+            school: input.school.map(Some),
+            grad_date: input.grad_date.map(Some),
             profile,
             role,
         })
@@ -427,6 +431,8 @@ fn changed_fields(before: &StoredMember, after: &StoredMember) -> prost_types::F
         ),
         ("career", before.career != after.career),
         ("industry", before.industry != after.industry),
+        ("school", before.school != after.school),
+        ("grad_date", before.grad_date != after.grad_date),
         ("profile", before.profile != after.profile),
         ("role", before.role != after.role),
     ];
@@ -486,6 +492,50 @@ mod tests {
             first_name: "First".into(),
             last_name: "Last".into(),
             ..Default::default()
+        }
+    }
+
+    #[test]
+    fn education_accepts_text_verbatim_and_tracks_changes() {
+        for value in ["", "  ", "Université 🎓\nSchool", "Spring 2028 (tentative)"] {
+            let mut request = input("a@example.org");
+            request.school = Some(value.into());
+            request.grad_date = Some(value.into());
+            let create = CreateMember::try_from(request).unwrap();
+            assert_eq!(create.school.as_deref(), Some(value));
+            assert_eq!(create.grad_date.as_deref(), Some(value));
+
+            let before = StoredMember {
+                school: None,
+                grad_date: None,
+                ..stored(1)
+            };
+            let update = UpdateMember::try_from(UpdateMemberRequest {
+                member_id: 1,
+                school: Some(value.into()),
+                grad_date: Some(value.into()),
+                ..Default::default()
+            })
+            .unwrap();
+            let after = update.apply(&before).unwrap();
+            assert_eq!(after.school.as_deref(), Some(value));
+            assert_eq!(after.grad_date.as_deref(), Some(value));
+            assert_eq!(
+                changed_fields(&before, &after).paths,
+                ["school", "grad_date"]
+            );
+            let public = crate::proto::members::Member::from(after.clone());
+            let admin = SensitiveMember::from(after.clone());
+            assert_eq!(public.school, admin.school);
+            assert_eq!(public.grad_date, admin.grad_date);
+            let untouched = UpdateMember::try_from(UpdateMemberRequest {
+                member_id: 1,
+                ..Default::default()
+            })
+            .unwrap()
+            .apply(&after)
+            .unwrap();
+            assert_eq!(untouched, after);
         }
     }
 
@@ -1106,6 +1156,11 @@ mod tests {
         assert_eq!(error.code(), Code::Unavailable);
     }
 
+    fn assert_education(member: &SensitiveMember) {
+        assert_eq!(member.school.as_deref(), Some("Example University"));
+        assert_eq!(member.grad_date.as_deref(), Some("Spring 2028"));
+    }
+
     fn stored(id: i32) -> StoredMember {
         StoredMember {
             id,
@@ -1119,6 +1174,8 @@ mod tests {
             instagram_username: None,
             career: Some("Engineer".into()),
             industry: None,
+            school: Some("Example University".into()),
+            grad_date: Some("Spring 2028".into()),
             profile: Some(format!("notes {id}")),
             role: None,
             updated_at: DateTime::UNIX_EPOCH,
@@ -1151,6 +1208,7 @@ mod tests {
             .into_inner()
             .member
             .unwrap();
+        assert_education(&member);
         assert_eq!(member.profile.as_deref(), Some("notes 1"));
         assert_eq!(member.linkedin_username.as_deref(), Some("member-1"));
 
@@ -1169,6 +1227,9 @@ mod tests {
             .await
             .unwrap()
             .into_inner();
+        for member in &page.members {
+            assert_education(member);
+        }
         assert_eq!(page.next_page_token, "1:1");
         let profiles: Vec<_> = page
             .members
@@ -1190,6 +1251,8 @@ mod tests {
             .create_member(Request::new(CreateMemberRequest {
                 joined_at: Some(joined_at),
                 profile: Some("new notes".into()),
+                school: Some("Example University".into()),
+                grad_date: Some("Spring 2028".into()),
                 ..input("new@example.org")
             }))
             .await
@@ -1197,6 +1260,7 @@ mod tests {
             .into_inner()
             .member
             .unwrap();
+        assert_education(&created);
         assert_eq!(created.profile.as_deref(), Some("new notes"));
         assert_eq!(created.member_id, 3);
         assert_eq!(created.joined_at, Some(joined_at));
@@ -1214,6 +1278,7 @@ mod tests {
             .into_inner()
             .member
             .unwrap();
+        assert_education(&updated);
         assert_eq!(updated.profile.as_deref(), Some("notes 1"));
         assert_eq!(updated.first_name, "New");
         assert_eq!(updated.last_name, "Last");
@@ -1228,6 +1293,7 @@ mod tests {
             .into_inner()
             .member
             .unwrap();
+        assert_education(&archived);
         assert!(archived.archived_at.is_some());
 
         let error = service
@@ -1241,13 +1307,19 @@ mod tests {
     async fn bulk_operations_report_each_outcome() {
         let changed = |email: &str| CreateMemberRequest {
             first_name: "Changed".into(),
+            school: Some("Example University".into()),
+            grad_date: Some("Spring 2028".into()),
             ..input(email)
         };
 
         let results = stored_service()
             .bulk_member_operations(Request::new(BulkMemberOperationsRequest {
                 operations: vec![
-                    operation(Operation::Create(input("new@example.org"))),
+                    operation(Operation::Create(CreateMemberRequest {
+                        school: Some("Example University".into()),
+                        grad_date: Some("Spring 2028".into()),
+                        ..input("new@example.org")
+                    })),
                     operation(Operation::Update(UpdateMemberRequest {
                         member_id: 1,
                         first_name: Some("New".into()),
@@ -1277,6 +1349,19 @@ mod tests {
             .unwrap()
             .into_inner()
             .results;
+
+        for result in &results {
+            match result.outcome.as_ref().unwrap() {
+                Outcome::Created(value) => assert_education(value.member.as_ref().unwrap()),
+                Outcome::Updated(value) => {
+                    assert_education(value.before.as_ref().unwrap());
+                    assert_education(value.after.as_ref().unwrap());
+                }
+                Outcome::Archived(value) => assert_education(value.member.as_ref().unwrap()),
+                Outcome::Unchanged(value) => assert_education(value.member.as_ref().unwrap()),
+                other => panic!("unexpected outcome {other:?}"),
+            }
+        }
 
         let outcomes: Vec<_> = results
             .into_iter()

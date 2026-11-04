@@ -80,6 +80,28 @@ impl<R: MembersRepository, T: From<BaseMember>> MembersReader<R, T> {
     }
 }
 
+fn preferences(
+    values: Vec<crate::domain::members::CommunicationMethod>,
+) -> Option<crate::proto::members::PreferredCommunications> {
+    use crate::domain::members::CommunicationMethod as Stored;
+    use crate::proto::members::CommunicationMethod as Proto;
+    if values.is_empty() {
+        return None;
+    }
+    Some(crate::proto::members::PreferredCommunications {
+        values: values
+            .into_iter()
+            .map(|value| match value {
+                Stored::Email => Proto::Email,
+                Stored::PhoneNumber => Proto::PhoneNumber,
+                Stored::Discord => Proto::Discord,
+                Stored::Instagram => Proto::Instagram,
+                Stored::LinkedIn => Proto::LinkedIn,
+            } as i32)
+            .collect(),
+    })
+}
+
 impl From<StoredRole> for i32 {
     fn from(role: StoredRole) -> Self {
         let role = match role {
@@ -95,6 +117,7 @@ impl From<BaseMember> for Member {
     fn from(member: BaseMember) -> Self {
         Self {
             member_id: member.id,
+            preferred_communications: preferences(member.preferred_communications),
             email: member.email,
             first_name: member.first_name,
             last_name: member.last_name,
@@ -118,6 +141,7 @@ impl From<BaseMember> for SensitiveMember {
     fn from(member: BaseMember) -> Self {
         Self {
             member_id: member.id,
+            preferred_communications: preferences(member.preferred_communications),
             email: member.email,
             first_name: member.first_name,
             last_name: member.last_name,

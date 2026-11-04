@@ -2,9 +2,54 @@ use chrono::Utc;
 use sqlx::PgPool;
 
 use crate::domain::members::{
-    AutocompleteField, CreateMember, Member, MemberIdentifier, MemberRole, OperationOutcome,
-    UpdateMember,
+    AutocompleteField, CommunicationMethod, CreateMember, Member, MemberIdentifier, MemberRole,
+    OperationOutcome, UpdateMember, normalize_preferences,
 };
+
+struct MemberRow {
+    id: i32,
+    email: String,
+    first_name: String,
+    last_name: String,
+    joined_at: chrono::DateTime<Utc>,
+    discord_id: Option<String>,
+    discord_username: Option<String>,
+    linkedin_username: Option<String>,
+    instagram_username: Option<String>,
+    career: Option<String>,
+    industry: Option<String>,
+    profile: Option<String>,
+    role: Option<MemberRole>,
+    school: Option<String>,
+    grad_date: Option<String>,
+    updated_at: chrono::DateTime<Utc>,
+    archived_at: Option<chrono::DateTime<Utc>>,
+}
+
+impl From<MemberRow> for Member {
+    fn from(row: MemberRow) -> Self {
+        Self {
+            id: row.id,
+            email: row.email,
+            first_name: row.first_name,
+            last_name: row.last_name,
+            joined_at: row.joined_at,
+            discord_id: row.discord_id,
+            discord_username: row.discord_username,
+            linkedin_username: row.linkedin_username,
+            instagram_username: row.instagram_username,
+            career: row.career,
+            industry: row.industry,
+            profile: row.profile,
+            role: row.role,
+            school: row.school,
+            grad_date: row.grad_date,
+            updated_at: row.updated_at,
+            archived_at: row.archived_at,
+            preferred_communications: vec![],
+        }
+    }
+}
 
 pub trait MembersRepository: Send + Sync + 'static {
     fn get(
@@ -62,14 +107,66 @@ impl PgMembersRepository {
         Self { pool }
     }
 
+    async fn load_preferences<'e, E>(members: &mut [Member], executor: E) -> Result<(), sqlx::Error>
+    where
+        E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+    {
+        if members.is_empty() {
+            return Ok(());
+        }
+        let ids: Vec<_> = members.iter().map(|member| member.id).collect();
+        let rows = sqlx::query!(
+            r#"SELECT "memberId" AS member_id, method AS "method: CommunicationMethod"
+               FROM "UserPreferredCommunication"
+               WHERE "memberId" = ANY($1) ORDER BY "memberId", method"#,
+            &ids,
+        )
+        .fetch_all(executor)
+        .await?;
+        let mut preferences = std::collections::HashMap::<i32, Vec<CommunicationMethod>>::new();
+        for row in rows {
+            preferences
+                .entry(row.member_id)
+                .or_default()
+                .push(row.method);
+        }
+        for member in members {
+            member.preferred_communications =
+                normalize_preferences(preferences.remove(&member.id).unwrap_or_default());
+        }
+        Ok(())
+    }
+
+    async fn replace_preferences(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        member_id: i32,
+        values: &[CommunicationMethod],
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"DELETE FROM "UserPreferredCommunication" WHERE "memberId" = $1"#,
+            member_id
+        )
+        .execute(&mut **tx)
+        .await?;
+        sqlx::query!(
+            r#"INSERT INTO "UserPreferredCommunication" ("memberId", method)
+                       SELECT $1, unnest($2::communication_method[])"#,
+            member_id,
+            values as &[CommunicationMethod],
+        )
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
     async fn update_in_transaction(
         &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
         input: UpdateMember,
         skip_unchanged: bool,
     ) -> Result<UpdateResult, sqlx::Error> {
-        let before = sqlx::query_as!(
-            Member,
+        let mut before: Member = sqlx::query_as!(
+            MemberRow,
             r#"
             SELECT
                 id,
@@ -98,7 +195,9 @@ impl PgMembersRepository {
             input.member_id
         )
         .fetch_one(&mut **tx)
-        .await?;
+        .await?
+        .into();
+        Self::load_preferences(std::slice::from_mut(&mut before), &mut **tx).await?;
 
         let after = input.apply(&before)?;
 
@@ -110,8 +209,9 @@ impl PgMembersRepository {
             });
         }
 
-        let after = sqlx::query_as!(
-            Member,
+        let preferences = after.preferred_communications.clone();
+        let mut after: Member = sqlx::query_as!(
+            MemberRow,
             r#"
             UPDATE
                 "Member"
@@ -170,7 +270,12 @@ impl PgMembersRepository {
             after.grad_date
         )
         .fetch_one(&mut **tx)
-        .await?;
+        .await?
+        .into();
+        if preferences != before.preferred_communications {
+            Self::replace_preferences(tx, before.id, &preferences).await?;
+        }
+        after.preferred_communications = preferences;
 
         Ok(UpdateResult {
             before,
@@ -181,7 +286,7 @@ impl PgMembersRepository {
 
     async fn archive(&self, member_id: i32) -> Result<(Member, bool), sqlx::Error> {
         let updated = sqlx::query_as!(
-            Member,
+            MemberRow,
             r#"
             UPDATE
                 "Member"
@@ -218,7 +323,7 @@ impl PgMembersRepository {
 
         let Some(stored) = updated else {
             let existing = sqlx::query_as!(
-                Member,
+                MemberRow,
                 r#"
                 SELECT
                     id,
@@ -248,19 +353,23 @@ impl PgMembersRepository {
             .fetch_one(&self.pool)
             .await?;
 
+            let mut existing: Member = existing.into();
+            Self::load_preferences(std::slice::from_mut(&mut existing), &self.pool).await?;
             return Ok((existing, false));
         };
 
+        let mut stored: Member = stored.into();
+        Self::load_preferences(std::slice::from_mut(&mut stored), &self.pool).await?;
         Ok((stored, true))
     }
 }
 
 impl MembersRepository for PgMembersRepository {
     async fn get(&self, identifier: MemberIdentifier) -> Result<Option<Member>, sqlx::Error> {
-        match identifier {
+        let row = match identifier {
             MemberIdentifier::Id(id) => {
                 sqlx::query_as!(
-                    Member,
+                    MemberRow,
                     r#"
                     SELECT
                         id,
@@ -292,7 +401,7 @@ impl MembersRepository for PgMembersRepository {
             }
             MemberIdentifier::Email(email) => {
                 sqlx::query_as!(
-                    Member,
+                    MemberRow,
                     r#"
                     SELECT
                         id,
@@ -324,7 +433,7 @@ impl MembersRepository for PgMembersRepository {
             }
             MemberIdentifier::DiscordId(id) => {
                 sqlx::query_as!(
-                    Member,
+                    MemberRow,
                     r#"
                     SELECT
                         id,
@@ -354,7 +463,12 @@ impl MembersRepository for PgMembersRepository {
                 .fetch_optional(&self.pool)
                 .await
             }
+        }?;
+        let mut member = row.map(Member::from);
+        if let Some(member) = &mut member {
+            Self::load_preferences(std::slice::from_mut(member), &self.pool).await?;
         }
+        Ok(member)
     }
 
     async fn list(
@@ -363,8 +477,8 @@ impl MembersRepository for PgMembersRepository {
         after: Option<i32>,
         limit: i64,
     ) -> Result<Vec<Member>, sqlx::Error> {
-        sqlx::query_as!(
-            Member,
+        let rows = sqlx::query_as!(
+            MemberRow,
             r#"
             SELECT
                 id,
@@ -399,14 +513,19 @@ impl MembersRepository for PgMembersRepository {
             limit
         )
         .fetch_all(&self.pool)
-        .await
+        .await?;
+        let mut members: Vec<Member> = rows.into_iter().map(Into::into).collect();
+        Self::load_preferences(&mut members, &self.pool).await?;
+        Ok(members)
     }
 
     async fn create_member(&self, input: CreateMember) -> Result<Member, sqlx::Error> {
         let now = Utc::now();
+        let mut tx = self.pool.begin().await?;
+        let preferences = normalize_preferences(input.preferred_communications.unwrap_or_default());
 
-        sqlx::query_as!(
-            Member,
+        let mut member: Member = sqlx::query_as!(
+            MemberRow,
             r#"
             INSERT INTO "Member"
                 (email, "firstName", "lastName", "joinedAt", "discordId", "discordUsername",
@@ -448,8 +567,12 @@ impl MembersRepository for PgMembersRepository {
             input.school,
             input.grad_date
         )
-        .fetch_one(&self.pool)
-        .await
+        .fetch_one(&mut *tx)
+        .await?.into();
+        Self::replace_preferences(&mut tx, member.id, &preferences).await?;
+        member.preferred_communications = preferences;
+        tx.commit().await?;
+        Ok(member)
     }
 
     async fn update_member(&self, input: UpdateMember) -> Result<Member, sqlx::Error> {
@@ -703,6 +826,9 @@ pub mod fake {
                     grad_date: input.grad_date,
                     profile: input.profile,
                     role: input.role,
+                    preferred_communications: normalize_preferences(
+                        input.preferred_communications.unwrap_or_default(),
+                    ),
                     updated_at: DateTime::UNIX_EPOCH,
                     archived_at: None,
                 })

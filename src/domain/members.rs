@@ -9,7 +9,7 @@ pub enum MemberRole {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, sqlx::Type)]
-#[sqlx(type_name = "communication_method")]
+#[sqlx(type_name = "\"CommunicationMethod\"")]
 pub enum CommunicationMethod {
     Email,
     PhoneNumber,
@@ -417,7 +417,7 @@ mod tests {
                 grad_date: None,
                 profile: None,
                 role: None,
-            preferred_communications: None,
+                preferred_communications: None,
             }) if email == "a@example.org" && first_name == "First" && last_name == "Last"
         ));
 

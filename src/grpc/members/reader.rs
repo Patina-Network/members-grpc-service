@@ -4,14 +4,18 @@ use tonic::Status;
 
 use crate::{
     db::members::MembersRepository,
-    domain::members::{Member as BaseMember, MemberIdentifier, MemberRole as StoredRole},
+    domain::members::{
+        CommunicationMethod as StoredMethod, Member as BaseMember, MemberIdentifier,
+        MemberRole as StoredRole,
+    },
     grpc::{
         database_status, page::Page, timestamp, validate_discord_id, validate_email,
         validate_member_id,
     },
     proto::members::{
-        GetMemberRequest, ListMembersRequest, Member, MemberRole as ProtoRole,
-        admin::SensitiveMember, get_member_request::Identifier,
+        CommunicationMethod as ProtoMethod, GetMemberRequest, ListMembersRequest, Member,
+        MemberRole as ProtoRole, PreferredCommunications, admin::SensitiveMember,
+        get_member_request::Identifier,
     },
 };
 
@@ -80,26 +84,26 @@ impl<R: MembersRepository, T: From<BaseMember>> MembersReader<R, T> {
     }
 }
 
-fn preferences(
-    values: Vec<crate::domain::members::CommunicationMethod>,
-) -> Option<crate::proto::members::PreferredCommunications> {
-    use crate::domain::members::CommunicationMethod as Stored;
-    use crate::proto::members::CommunicationMethod as Proto;
+fn preferences(values: Vec<StoredMethod>) -> Option<PreferredCommunications> {
     if values.is_empty() {
         return None;
     }
-    Some(crate::proto::members::PreferredCommunications {
-        values: values
-            .into_iter()
-            .map(|value| match value {
-                Stored::Email => Proto::Email,
-                Stored::PhoneNumber => Proto::PhoneNumber,
-                Stored::Discord => Proto::Discord,
-                Stored::Instagram => Proto::Instagram,
-                Stored::LinkedIn => Proto::LinkedIn,
-            } as i32)
-            .collect(),
+    Some(PreferredCommunications {
+        values: values.into_iter().map(Into::into).collect(),
     })
+}
+
+impl From<StoredMethod> for i32 {
+    fn from(method: StoredMethod) -> Self {
+        let method = match method {
+            StoredMethod::Email => ProtoMethod::Email,
+            StoredMethod::PhoneNumber => ProtoMethod::PhoneNumber,
+            StoredMethod::Discord => ProtoMethod::Discord,
+            StoredMethod::Instagram => ProtoMethod::Instagram,
+            StoredMethod::LinkedIn => ProtoMethod::LinkedIn,
+        };
+        method as i32
+    }
 }
 
 impl From<StoredRole> for i32 {
@@ -117,7 +121,6 @@ impl From<BaseMember> for Member {
     fn from(member: BaseMember) -> Self {
         Self {
             member_id: member.id,
-            preferred_communications: preferences(member.preferred_communications),
             email: member.email,
             first_name: member.first_name,
             last_name: member.last_name,
@@ -133,6 +136,7 @@ impl From<BaseMember> for Member {
             school: member.school,
             grad_date: member.grad_date,
             role: member.role.map(|r| r.into()),
+            preferred_communications: preferences(member.preferred_communications),
         }
     }
 }
@@ -141,7 +145,6 @@ impl From<BaseMember> for SensitiveMember {
     fn from(member: BaseMember) -> Self {
         Self {
             member_id: member.id,
-            preferred_communications: preferences(member.preferred_communications),
             email: member.email,
             first_name: member.first_name,
             last_name: member.last_name,
@@ -158,6 +161,7 @@ impl From<BaseMember> for SensitiveMember {
             grad_date: member.grad_date,
             profile: member.profile,
             role: member.role.map(Into::into),
+            preferred_communications: preferences(member.preferred_communications),
         }
     }
 }

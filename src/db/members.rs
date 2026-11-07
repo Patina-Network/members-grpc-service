@@ -131,8 +131,7 @@ impl PgMembersRepository {
                 .push(row.method);
         }
         for member in members {
-            member.preferred_communications =
-                normalize_preferences(preferences.remove(&member.id).unwrap_or_default());
+            member.preferred_communications = preferences.remove(&member.id).unwrap_or_default();
         }
         Ok(())
     }
@@ -150,7 +149,7 @@ impl PgMembersRepository {
         .await?;
         sqlx::query!(
             r#"INSERT INTO "UserPreferredCommunication" ("memberId", method)
-                       SELECT $1, unnest($2::communication_method[])"#,
+                       SELECT $1, unnest($2::"CommunicationMethod"[])"#,
             member_id,
             values as &[CommunicationMethod],
         )
@@ -568,8 +567,11 @@ impl MembersRepository for PgMembersRepository {
             input.grad_date
         )
         .fetch_one(&mut *tx)
-        .await?.into();
-        Self::replace_preferences(&mut tx, member.id, &preferences).await?;
+        .await?
+        .into();
+        if !preferences.is_empty() {
+            Self::replace_preferences(&mut tx, member.id, &preferences).await?;
+        }
         member.preferred_communications = preferences;
         tx.commit().await?;
         Ok(member)

@@ -107,6 +107,8 @@ impl From<BaseMember> for Member {
             instagram_username: member.instagram_username,
             career: member.career,
             industry: member.industry,
+            school: member.school,
+            grad_date: member.grad_date,
             role: member.role.map(|r| r.into()),
         }
     }
@@ -128,6 +130,8 @@ impl From<BaseMember> for SensitiveMember {
             instagram_username: member.instagram_username,
             career: member.career,
             industry: member.industry,
+            school: member.school,
+            grad_date: member.grad_date,
             profile: member.profile,
             role: member.role.map(Into::into),
         }

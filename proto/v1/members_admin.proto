@@ -45,6 +45,8 @@ message SensitiveMember {
   optional string industry = 13;
   optional string profile = 14;
   optional members.MemberRole role = 15;
+  optional string school = 16;
+  optional string grad_date = 17;
 }
 
 message GetSensitiveMemberResponse { SensitiveMember member = 1; }
@@ -70,6 +72,8 @@ message CreateMemberRequest {
   optional string industry = 10;
   optional string profile = 11;
   optional members.MemberRole role = 12;
+  optional string school = 13;
+  optional string grad_date = 14;
 }
 
 message CreateMemberResponse { SensitiveMember member = 1; }
@@ -96,6 +100,9 @@ message UpdateMemberRequest {
   optional string profile = 12;
   // unset = dont change, MEMBER_ROLE_UNSPECIFIED clears it
   optional members.MemberRole role = 13;
+  // Unset keeps the value; all text, including empty strings, is stored verbatim.
+  optional string school = 14;
+  optional string grad_date = 15;
 }
 
 message UpdateMemberResponse { SensitiveMember member = 1; }

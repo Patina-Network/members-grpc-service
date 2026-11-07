@@ -18,6 +18,13 @@ service MembersService {
   // Distinct industries stored on members, most common first, for UI
   // autocomplete.
   rpc listIndustries(ListIndustriesRequest) returns (ListIndustriesResponse);
+
+  // Distinct schools stored on members, most common first, for UI autocomplete.
+  rpc listSchools(ListSchoolsRequest) returns (ListSchoolsResponse);
+
+  // Distinct grad dates stored on members, most common first, for UI
+  // autocomplete.
+  rpc listGradDates(ListGradDatesRequest) returns (ListGradDatesResponse);
 }
 
 enum MemberRole {
@@ -47,6 +54,8 @@ message Member {
   optional string industry = 13;
   reserved 14;
   optional MemberRole role = 15;
+  optional string school = 16;
+  optional string grad_date = 17;
 }
 
 message GetMemberRequest {
@@ -85,3 +94,17 @@ message ListIndustriesRequest {
 }
 
 message ListIndustriesResponse { repeated string industries = 1; }
+
+message ListSchoolsRequest {
+  string query = 1;
+  // default of 10, clamps at 50
+  uint32 limit = 2;
+}
+message ListSchoolsResponse { repeated string schools = 1; }
+
+message ListGradDatesRequest {
+  string query = 1;
+  // default of 10, clamps at 50
+  uint32 limit = 2;
+}
+message ListGradDatesResponse { repeated string grad_dates = 1; }

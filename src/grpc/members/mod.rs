@@ -324,6 +324,7 @@ mod tests {
             grad_date: Some("Spring 2028".into()),
             profile: Some("admin notes".into()),
             role: None,
+            preferred_communications: vec![],
             updated_at: DateTime::UNIX_EPOCH,
             archived_at: (id == 3).then_some(DateTime::UNIX_EPOCH),
         }

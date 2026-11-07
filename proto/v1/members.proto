@@ -8,8 +8,6 @@ option java_package = "org.patinanetwork.grpc.members.v1";
 option java_multiple_files = true;
 
 service MembersService {
-  rpc listSchools(ListSchoolsRequest) returns (ListSchoolsResponse);
-  rpc listGradDates(ListGradDatesRequest) returns (ListGradDatesResponse);
   rpc getMember(GetMemberRequest) returns (GetMemberResponse);
 
   rpc listMembers(ListMembersRequest) returns (ListMembersResponse);
@@ -20,6 +18,13 @@ service MembersService {
   // Distinct industries stored on members, most common first, for UI
   // autocomplete.
   rpc listIndustries(ListIndustriesRequest) returns (ListIndustriesResponse);
+
+  // Distinct schools stored on members, most common first, for UI autocomplete.
+  rpc listSchools(ListSchoolsRequest) returns (ListSchoolsResponse);
+
+  // Distinct grad dates stored on members, most common first, for UI
+  // autocomplete.
+  rpc listGradDates(ListGradDatesRequest) returns (ListGradDatesResponse);
 }
 
 enum MemberRole {

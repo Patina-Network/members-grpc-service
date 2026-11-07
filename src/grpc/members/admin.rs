@@ -8,14 +8,15 @@ use crate::{
     db::members::MembersRepository,
     domain::members::{
         CommunicationMethod, CreateMember, Member as StoredMember, MemberIdentifier, MemberRole,
-        OperationOutcome, UpdateMember, UpsertWrite, normalize_preferences,
+        OperationOutcome, UpdateMember, UpsertWrite,
     },
     grpc::{
         database_status, parse_timestamp, validate_discord_id, validate_email, validate_member_id,
     },
     metrics::{BulkOperationKind, BulkOperationOutcome, record_bulk_member_operation},
     proto::members::{
-        GetMemberRequest, ListMembersRequest, MemberRole as ProtoRole,
+        CommunicationMethod as ProtoMethod, GetMemberRequest, ListMembersRequest,
+        MemberRole as ProtoRole, PreferredCommunications,
         admin::{
             ArchiveMemberRequest, ArchiveMemberResponse, BulkMemberOperationsRequest,
             BulkMemberOperationsResponse, CreateMemberRequest, CreateMemberResponse,
@@ -164,25 +165,21 @@ fn parse_joined_at(value: Option<Timestamp>) -> Result<Option<DateTime<Utc>>, St
         .transpose()
 }
 
-fn parse_preferences(
-    input: crate::proto::members::PreferredCommunications,
-) -> Result<Vec<CommunicationMethod>, Status> {
-    use crate::proto::members::CommunicationMethod as Proto;
+fn parse_preferences(input: PreferredCommunications) -> Result<Vec<CommunicationMethod>, Status> {
     input
         .values
         .into_iter()
-        .map(|value| match Proto::try_from(value) {
-            Ok(Proto::Email) => Ok(CommunicationMethod::Email),
-            Ok(Proto::PhoneNumber) => Ok(CommunicationMethod::PhoneNumber),
-            Ok(Proto::Discord) => Ok(CommunicationMethod::Discord),
-            Ok(Proto::Instagram) => Ok(CommunicationMethod::Instagram),
-            Ok(Proto::LinkedIn) => Ok(CommunicationMethod::LinkedIn),
+        .map(|value| match ProtoMethod::try_from(value) {
+            Ok(ProtoMethod::Email) => Ok(CommunicationMethod::Email),
+            Ok(ProtoMethod::PhoneNumber) => Ok(CommunicationMethod::PhoneNumber),
+            Ok(ProtoMethod::Discord) => Ok(CommunicationMethod::Discord),
+            Ok(ProtoMethod::Instagram) => Ok(CommunicationMethod::Instagram),
+            Ok(ProtoMethod::LinkedIn) => Ok(CommunicationMethod::LinkedIn),
             _ => Err(Status::invalid_argument(
                 "preferred_communications contains an invalid method",
             )),
         })
-        .collect::<Result<Vec<_>, _>>()
-        .map(normalize_preferences)
+        .collect()
 }
 
 fn parse_role(role: i32) -> Result<Option<MemberRole>, Status> {
@@ -929,10 +926,8 @@ mod tests {
         }
     }
 
-    fn communication_values(
-        values: &[i32],
-    ) -> Option<crate::proto::members::PreferredCommunications> {
-        Some(crate::proto::members::PreferredCommunications {
+    fn communication_values(values: &[i32]) -> Option<PreferredCommunications> {
+        Some(PreferredCommunications {
             values: values.to_vec(),
         })
     }

@@ -37,7 +37,7 @@ async function main() {
     scan: {
       additionalArgs: {
         "rust.lcov.reportPaths": "./lcov.info",
-        exclusions: `${exclusions}`,
+        "coverage.exclusions": `${exclusions}`,
       },
       organization: SONAR_ORGANIZATION,
       sourceCodeDir: "src",

@@ -5,14 +5,15 @@ use std::{
 };
 
 use bytes::Bytes;
-use metrics::{counter, histogram};
 use pin_project_lite::pin_project;
 use tonic::{
-    Status,
+    Code, Status,
     body::Body,
     codegen::http::{HeaderMap, Request, Response},
 };
 use tonic_middleware::{Middleware, ServiceBound};
+
+use crate::metrics::{self, GrpcStatus};
 
 // TODO: migrate this to a separate library
 
@@ -33,8 +34,8 @@ where
 
         match result {
             Ok(response) => {
-                if let Some(status) = status_code_from(response.headers()) {
-                    record_grpc_request_metrics(grpc_method, status, start);
+                if let Some(status) = status_from(response.headers()) {
+                    record(grpc_method, status, start);
                     return Ok(response);
                 }
 
@@ -51,52 +52,21 @@ where
                 Ok(Response::from_parts(parts, Body::new(body)))
             }
             Err(err) => {
-                record_grpc_request_metrics(grpc_method, "TRANSPORT_ERROR", start);
+                record(grpc_method, GrpcStatus::TransportError, start);
                 Err(err)
             }
         }
     }
 }
 
-fn status_code_from(headers: &HeaderMap) -> Option<&'static str> {
+fn status_from(headers: &HeaderMap) -> Option<GrpcStatus> {
     headers
         .get("grpc-status")
-        .map(|value| match value.as_bytes() {
-            b"0" => "OK",
-            b"1" => "CANCELLED",
-            b"2" => "UNKNOWN",
-            b"3" => "INVALID_ARGUMENT",
-            b"4" => "DEADLINE_EXCEEDED",
-            b"5" => "NOT_FOUND",
-            b"6" => "ALREADY_EXISTS",
-            b"7" => "PERMISSION_DENIED",
-            b"8" => "RESOURCE_EXHAUSTED",
-            b"9" => "FAILED_PRECONDITION",
-            b"10" => "ABORTED",
-            b"11" => "OUT_OF_RANGE",
-            b"12" => "UNIMPLEMENTED",
-            b"13" => "INTERNAL",
-            b"14" => "UNAVAILABLE",
-            b"15" => "DATA_LOSS",
-            b"16" => "UNAUTHENTICATED",
-            _ => "UNKNOWN",
-        })
+        .map(|value| Code::from_bytes(value.as_bytes()).into())
 }
 
-fn record_grpc_request_metrics(grpc_method: Arc<str>, status: &'static str, start: Instant) {
-    counter!(
-        "grpc_requests_total",
-        "method" => grpc_method.clone(),
-        "status" => status,
-    )
-    .increment(1);
-
-    histogram!(
-        "grpc_request_duration_seconds",
-        "method" => grpc_method,
-        "status" => status,
-    )
-    .record(start.elapsed().as_secs_f64());
+fn record(grpc_method: Arc<str>, status: GrpcStatus, start: Instant) {
+    metrics::record_grpc_request(grpc_method, status, start.elapsed());
 }
 
 pin_project! {
@@ -114,20 +84,20 @@ struct GrpcMetricsRecorder {
 }
 
 impl GrpcMetricsRecorder {
-    fn record(&mut self, status: &'static str) {
+    fn record(&mut self, status: GrpcStatus) {
         if self.recorded {
             return;
         }
 
         self.recorded = true;
-        record_grpc_request_metrics(self.grpc_method.clone(), status, self.start);
+        record(self.grpc_method.clone(), status, self.start);
     }
 }
 
 impl Drop for GrpcMetricsRecorder {
     fn drop(&mut self) {
         if !self.recorded {
-            self.record("INCOMPLETE");
+            self.record(GrpcStatus::Incomplete);
         }
     }
 }
@@ -145,39 +115,19 @@ impl http_body::Body for ObservedGrpcBody {
         match this.body.poll_frame(cx) {
             Poll::Ready(Some(Ok(frame))) => {
                 if let Some(trailers) = frame.trailers_ref() {
-                    let status = status_code_from(trailers).unwrap_or("UNKNOWN");
+                    let status = status_from(trailers).unwrap_or(GrpcStatus::Unknown);
                     this.recorder.record(status);
                 }
 
                 Poll::Ready(Some(Ok(frame)))
             }
             Poll::Ready(Some(Err(status))) => {
-                let code = match status.code() {
-                    tonic::Code::Ok => "OK",
-                    tonic::Code::Cancelled => "CANCELLED",
-                    tonic::Code::Unknown => "UNKNOWN",
-                    tonic::Code::InvalidArgument => "INVALID_ARGUMENT",
-                    tonic::Code::DeadlineExceeded => "DEADLINE_EXCEEDED",
-                    tonic::Code::NotFound => "NOT_FOUND",
-                    tonic::Code::AlreadyExists => "ALREADY_EXISTS",
-                    tonic::Code::PermissionDenied => "PERMISSION_DENIED",
-                    tonic::Code::ResourceExhausted => "RESOURCE_EXHAUSTED",
-                    tonic::Code::FailedPrecondition => "FAILED_PRECONDITION",
-                    tonic::Code::Aborted => "ABORTED",
-                    tonic::Code::OutOfRange => "OUT_OF_RANGE",
-                    tonic::Code::Unimplemented => "UNIMPLEMENTED",
-                    tonic::Code::Internal => "INTERNAL",
-                    tonic::Code::Unavailable => "UNAVAILABLE",
-                    tonic::Code::DataLoss => "DATA_LOSS",
-                    tonic::Code::Unauthenticated => "UNAUTHENTICATED",
-                };
-
-                this.recorder.record(code);
+                this.recorder.record(status.code().into());
 
                 Poll::Ready(Some(Err(status)))
             }
             Poll::Ready(None) => {
-                this.recorder.record("OK");
+                this.recorder.record(GrpcStatus::Ok);
                 Poll::Ready(None)
             }
             Poll::Pending => Poll::Pending,

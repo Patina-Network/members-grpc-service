@@ -29,6 +29,7 @@ chrono = { version = "0.4.45", default-features = false, features = ["std", "clo
 
 email_address = { version = "0.2.9", default-features = false }
 thiserror = "2.0.20"
+strum = { version = "0.28.0", features = ["derive"] }
 
 [build-dependencies]
 tonic-prost-build = "0.14"

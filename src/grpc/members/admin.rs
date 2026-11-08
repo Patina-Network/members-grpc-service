@@ -13,6 +13,7 @@ use crate::{
     grpc::{
         database_status, parse_timestamp, validate_discord_id, validate_email, validate_member_id,
     },
+    metrics::{BulkOperationKind, BulkOperationOutcome, record_bulk_member_operation},
     proto::members::{
         GetMemberRequest, ListMembersRequest, MemberRole as ProtoRole,
         admin::{
@@ -373,11 +374,11 @@ impl<R: MembersRepository> members_admin_service_server::MembersAdminService
         let mut results = Vec::with_capacity(operations.len());
         for (index, operation) in operations.into_iter().enumerate() {
             let kind = match &operation.operation {
-                Some(Operation::Create(_)) => "create",
-                Some(Operation::Update(_)) => "update",
-                Some(Operation::Archive(_)) => "archive",
-                Some(Operation::Upsert(_)) => "upsert",
-                None => "missing",
+                Some(Operation::Create(_)) => BulkOperationKind::Create,
+                Some(Operation::Update(_)) => BulkOperationKind::Update,
+                Some(Operation::Archive(_)) => BulkOperationKind::Archive,
+                Some(Operation::Upsert(_)) => BulkOperationKind::Upsert,
+                None => BulkOperationKind::Missing,
             };
 
             let outcome =
@@ -386,7 +387,7 @@ impl<R: MembersRepository> members_admin_service_server::MembersAdminService
                     .unwrap_or_else(|_| {
                         tracing::error!(
                             index,
-                            kind,
+                            kind = kind.as_ref(),
                             timeout = ?self.operation_timeout,
                             "bulk member operation timed out"
                         );
@@ -398,6 +399,16 @@ impl<R: MembersRepository> members_admin_service_server::MembersAdminService
                         })
                     });
 
+            record_bulk_member_operation(
+                kind,
+                match outcome {
+                    Outcome::Created(_) => BulkOperationOutcome::Created,
+                    Outcome::Updated(_) => BulkOperationOutcome::Updated,
+                    Outcome::Archived(_) => BulkOperationOutcome::Archived,
+                    Outcome::Unchanged(_) => BulkOperationOutcome::Unchanged,
+                    Outcome::Failed(_) => BulkOperationOutcome::Failed,
+                },
+            );
             results.push(MemberOperationResult {
                 index: index as u32,
                 outcome: Some(outcome),

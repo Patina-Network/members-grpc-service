@@ -1,5 +1,4 @@
 use anyhow::Context;
-use metrics_exporter_prometheus::PrometheusBuilder;
 use tokio::net::TcpListener;
 use tonic::transport::Server;
 use tonic_middleware::MiddlewareLayer;
@@ -13,7 +12,7 @@ use members_grpc_service::{
     grpc::members::{MembersService, MembersServiceServer},
     grpc::metrics::GrpcRequestMetricsMiddleware,
     http::{router, state::AppState},
-    proto,
+    metrics, proto,
 };
 
 fn init_tracing() {
@@ -41,9 +40,7 @@ fn init_tracing() {
 async fn main() -> anyhow::Result<()> {
     init_tracing();
 
-    let prom_handle = PrometheusBuilder::new()
-        .install_recorder()
-        .context("failed to install Prometheus recorder")?;
+    let prom_handle = metrics::install_recorder()?;
     let sys_collector = metrics_process::Collector::default();
     sys_collector.describe();
 
@@ -134,7 +131,8 @@ async fn main() -> anyhow::Result<()> {
         config,
         prometheus_handle: prom_handle,
         sys_collector,
-        health_check_repository: HealthCheckRepository::new(db),
+        health_check_repository: HealthCheckRepository::new(db.clone()),
+        db_pool: db,
     };
 
     let http_listener = TcpListener::bind(&http_addr)

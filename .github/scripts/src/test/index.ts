@@ -37,14 +37,14 @@ async function main() {
     scan: {
       additionalArgs: {
         "rust.lcov.reportPaths": "./lcov.info",
-        exclusions: `${exclusions}`,
+        "coverage.exclusions": `${exclusions}`,
       },
       organization: SONAR_ORGANIZATION,
       sourceCodeDir: "src",
       projectKey: SONAR_PROJECT_KEY,
     },
     run: {
-      runTestsCmd: $`cargo clippy --locked --all-targets --message-format=json > clippy-report.json && cargo tarpaulin --locked --out lcov`,
+      runTestsCmd: $`cargo clippy --locked --all-targets --message-format=json > clippy-report.json && cargo tarpaulin --locked --engine llvm --out lcov`,
     },
   });
 

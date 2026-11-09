@@ -1,0 +1,8 @@
+{
+  // Avoids `Box` hovers from pinned async-trait (see Cargo.toml).
+  "rust-analyzer.procMacro.ignored": {
+    "async-trait": ["async_trait"]
+  },
+  // Silences the hint the ignore above causes.
+  "rust-analyzer.diagnostics.disabled": ["proc-macro-disabled"]
+}

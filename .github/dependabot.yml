@@ -19,6 +19,9 @@ updates:
     patterns: ["*"]
     cooldown: { default-days: 7 }
     multi-ecosystem-group: main
+    # Pinned; see Cargo.toml.
+    ignore:
+      - dependency-name: async-trait
   - package-ecosystem: docker
     directory: /
     patterns: ["*"]

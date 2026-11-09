@@ -44,7 +44,7 @@ async function main() {
       projectKey: SONAR_PROJECT_KEY,
     },
     run: {
-      runTestsCmd: $`cargo clippy --locked --all-targets --message-format=json > clippy-report.json && cargo tarpaulin --locked --out lcov`,
+      runTestsCmd: $`cargo clippy --locked --all-targets --message-format=json > clippy-report.json && cargo tarpaulin --locked --engine llvm --out lcov`,
     },
   });
 

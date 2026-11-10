@@ -8,6 +8,23 @@ pub enum MemberRole {
     Mentor,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, sqlx::Type)]
+#[sqlx(type_name = "communication_method")]
+pub enum CommunicationMethod {
+    Email,
+    PhoneNumber,
+    Discord,
+    Instagram,
+    LinkedIn,
+}
+
+/// Canonical ordering makes preference equality independent of request order.
+pub fn normalize_preferences(mut values: Vec<CommunicationMethod>) -> Vec<CommunicationMethod> {
+    values.sort_unstable();
+    values.dedup();
+    values
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Member {
     pub id: i32,
@@ -25,6 +42,7 @@ pub struct Member {
     pub grad_date: Option<String>,
     pub profile: Option<String>,
     pub role: Option<MemberRole>,
+    pub preferred_communications: Vec<CommunicationMethod>,
     pub updated_at: DateTime<Utc>,
     pub archived_at: Option<DateTime<Utc>>,
 }
@@ -58,6 +76,7 @@ pub struct CreateMember {
     pub grad_date: Option<String>,
     pub profile: Option<String>,
     pub role: Option<MemberRole>,
+    pub preferred_communications: Option<Vec<CommunicationMethod>>,
 }
 
 pub struct UpdateMember {
@@ -84,6 +103,8 @@ pub struct UpdateMember {
     pub profile: Option<Option<String>>,
     /// `None` = dont change, `Some(None)` clears it
     pub role: Option<Option<MemberRole>>,
+    /// None = unchanged; Some(empty) clears all preferences.
+    pub preferred_communications: Option<Vec<CommunicationMethod>>,
 }
 
 #[derive(Clone)]
@@ -140,6 +161,10 @@ impl UpdateMember {
             after.role = role;
         }
 
+        if let Some(values) = self.preferred_communications {
+            after.preferred_communications = normalize_preferences(values);
+        }
+
         let discord_touched = self.discord_id.is_some() || self.discord_username.is_some();
         if let Some(discord_id) = self.discord_id {
             after.discord_id = discord_id;
@@ -186,6 +211,7 @@ impl UpsertWrite {
             grad_date: member.grad_date.map(Some),
             profile: member.profile.map(Some),
             role: member.role.map(Some),
+            preferred_communications: member.preferred_communications,
         })
     }
 }
@@ -211,6 +237,7 @@ mod tests {
             grad_date: None,
             profile: None,
             role: None,
+            preferred_communications: vec![],
             updated_at: DateTime::UNIX_EPOCH,
             archived_at: None,
         }
@@ -232,6 +259,7 @@ mod tests {
             grad_date: None,
             profile: None,
             role: None,
+            preferred_communications: None,
         }
     }
 
@@ -255,6 +283,7 @@ mod tests {
             grad_date: None,
             profile: None,
             role: None,
+            preferred_communications: None,
         }
     }
 
@@ -388,6 +417,7 @@ mod tests {
                 grad_date: None,
                 profile: None,
                 role: None,
+                preferred_communications: None,
             }) if email == "a@example.org" && first_name == "First" && last_name == "Last"
         ));
 

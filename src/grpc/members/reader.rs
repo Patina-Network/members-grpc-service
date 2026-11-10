@@ -4,14 +4,18 @@ use tonic::Status;
 
 use crate::{
     db::members::MembersRepository,
-    domain::members::{Member as BaseMember, MemberIdentifier, MemberRole as StoredRole},
+    domain::members::{
+        CommunicationMethod as StoredMethod, Member as BaseMember, MemberIdentifier,
+        MemberRole as StoredRole,
+    },
     grpc::{
         database_status, page::Page, timestamp, validate_discord_id, validate_email,
         validate_member_id,
     },
     proto::members::{
-        GetMemberRequest, ListMembersRequest, Member, MemberRole as ProtoRole,
-        admin::SensitiveMember, get_member_request::Identifier,
+        CommunicationMethod as ProtoMethod, GetMemberRequest, ListMembersRequest, Member,
+        MemberRole as ProtoRole, PreferredCommunications, admin::SensitiveMember,
+        get_member_request::Identifier,
     },
 };
 
@@ -80,6 +84,28 @@ impl<R: MembersRepository, T: From<BaseMember>> MembersReader<R, T> {
     }
 }
 
+fn preferences(values: Vec<StoredMethod>) -> Option<PreferredCommunications> {
+    if values.is_empty() {
+        return None;
+    }
+    Some(PreferredCommunications {
+        values: values.into_iter().map(Into::into).collect(),
+    })
+}
+
+impl From<StoredMethod> for i32 {
+    fn from(method: StoredMethod) -> Self {
+        let method = match method {
+            StoredMethod::Email => ProtoMethod::Email,
+            StoredMethod::PhoneNumber => ProtoMethod::PhoneNumber,
+            StoredMethod::Discord => ProtoMethod::Discord,
+            StoredMethod::Instagram => ProtoMethod::Instagram,
+            StoredMethod::LinkedIn => ProtoMethod::LinkedIn,
+        };
+        method as i32
+    }
+}
+
 impl From<StoredRole> for i32 {
     fn from(role: StoredRole) -> Self {
         let role = match role {
@@ -110,6 +136,7 @@ impl From<BaseMember> for Member {
             school: member.school,
             grad_date: member.grad_date,
             role: member.role.map(|r| r.into()),
+            preferred_communications: preferences(member.preferred_communications),
         }
     }
 }
@@ -134,6 +161,7 @@ impl From<BaseMember> for SensitiveMember {
             grad_date: member.grad_date,
             profile: member.profile,
             role: member.role.map(Into::into),
+            preferred_communications: preferences(member.preferred_communications),
         }
     }
 }

@@ -7,15 +7,16 @@ use tonic::{Request, Response, Status};
 use crate::{
     db::members::MembersRepository,
     domain::members::{
-        CreateMember, Member as StoredMember, MemberIdentifier, MemberRole, OperationOutcome,
-        UpdateMember, UpsertWrite,
+        CommunicationMethod, CreateMember, Member as StoredMember, MemberIdentifier, MemberRole,
+        OperationOutcome, UpdateMember, UpsertWrite,
     },
     grpc::{
         database_status, parse_timestamp, validate_discord_id, validate_email, validate_member_id,
     },
     metrics::{BulkOperationKind, BulkOperationOutcome, record_bulk_member_operation},
     proto::members::{
-        GetMemberRequest, ListMembersRequest, MemberRole as ProtoRole,
+        CommunicationMethod as ProtoMethod, GetMemberRequest, ListMembersRequest,
+        MemberRole as ProtoRole, PreferredCommunications,
         admin::{
             ArchiveMemberRequest, ArchiveMemberResponse, BulkMemberOperationsRequest,
             BulkMemberOperationsResponse, CreateMemberRequest, CreateMemberResponse,
@@ -164,6 +165,23 @@ fn parse_joined_at(value: Option<Timestamp>) -> Result<Option<DateTime<Utc>>, St
         .transpose()
 }
 
+fn parse_preferences(input: PreferredCommunications) -> Result<Vec<CommunicationMethod>, Status> {
+    input
+        .values
+        .into_iter()
+        .map(|value| match ProtoMethod::try_from(value) {
+            Ok(ProtoMethod::Email) => Ok(CommunicationMethod::Email),
+            Ok(ProtoMethod::PhoneNumber) => Ok(CommunicationMethod::PhoneNumber),
+            Ok(ProtoMethod::Discord) => Ok(CommunicationMethod::Discord),
+            Ok(ProtoMethod::Instagram) => Ok(CommunicationMethod::Instagram),
+            Ok(ProtoMethod::LinkedIn) => Ok(CommunicationMethod::LinkedIn),
+            _ => Err(Status::invalid_argument(
+                "preferred_communications contains an invalid method",
+            )),
+        })
+        .collect()
+}
+
 fn parse_role(role: i32) -> Result<Option<MemberRole>, Status> {
     match ProtoRole::try_from(role) {
         Ok(ProtoRole::Unspecified) => Ok(None),
@@ -219,6 +237,10 @@ impl TryFrom<CreateMemberRequest> for CreateMember {
             grad_date: input.grad_date,
             profile: input.profile,
             role: input.role.map(parse_role).transpose()?.flatten(),
+            preferred_communications: input
+                .preferred_communications
+                .map(parse_preferences)
+                .transpose()?,
         })
     }
 }
@@ -273,6 +295,10 @@ impl TryFrom<UpdateMemberRequest> for UpdateMember {
             grad_date: input.grad_date.map(Some),
             profile,
             role,
+            preferred_communications: input
+                .preferred_communications
+                .map(parse_preferences)
+                .transpose()?,
         })
     }
 }
@@ -446,6 +472,10 @@ fn changed_fields(before: &StoredMember, after: &StoredMember) -> prost_types::F
         ("grad_date", before.grad_date != after.grad_date),
         ("profile", before.profile != after.profile),
         ("role", before.role != after.role),
+        (
+            "preferred_communications",
+            before.preferred_communications != after.preferred_communications,
+        ),
     ];
 
     prost_types::FieldMask {
@@ -896,6 +926,167 @@ mod tests {
         }
     }
 
+    fn communication_values(values: &[i32]) -> Option<PreferredCommunications> {
+        Some(PreferredCommunications {
+            values: values.to_vec(),
+        })
+    }
+
+    #[test]
+    fn preferences_preserve_clear_replace_and_report_changes() {
+        let mut before = stored(1);
+        before.preferred_communications = vec![CommunicationMethod::Email];
+        for (requested, expected) in [
+            (None, vec![CommunicationMethod::Email]),
+            (communication_values(&[]), vec![]),
+            (
+                communication_values(&[5, 3, 5]),
+                vec![CommunicationMethod::Discord, CommunicationMethod::LinkedIn],
+            ),
+        ] {
+            let after = UpdateMember::try_from(UpdateMemberRequest {
+                member_id: 1,
+                preferred_communications: requested,
+                ..Default::default()
+            })
+            .unwrap()
+            .apply(&before)
+            .unwrap();
+            assert_eq!(after.preferred_communications, expected);
+            let expected_paths: Vec<String> = if after == before {
+                vec![]
+            } else {
+                vec!["preferred_communications".into()]
+            };
+            assert_eq!(changed_fields(&before, &after).paths, expected_paths);
+            let public = crate::proto::members::Member::from(after.clone());
+            let sensitive = SensitiveMember::from(after);
+            assert_eq!(
+                public.preferred_communications,
+                sensitive.preferred_communications
+            );
+            assert_eq!(
+                public.preferred_communications.is_none(),
+                expected.is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn preferences_validate_every_method_and_reject_invalid_numbers() {
+        for (number, method) in [
+            (1, CommunicationMethod::Email),
+            (2, CommunicationMethod::PhoneNumber),
+            (3, CommunicationMethod::Discord),
+            (4, CommunicationMethod::Instagram),
+            (5, CommunicationMethod::LinkedIn),
+        ] {
+            let created = CreateMember::try_from(CreateMemberRequest {
+                preferred_communications: communication_values(&[number]),
+                ..input("a@example.org")
+            })
+            .unwrap();
+            assert_eq!(created.preferred_communications, Some(vec![method]));
+            let mut member = stored(1);
+            member.preferred_communications = vec![method];
+            assert_eq!(
+                SensitiveMember::from(member).preferred_communications,
+                communication_values(&[number])
+            );
+        }
+        for number in [0, -1, 6, i32::MAX] {
+            let create = CreateMember::try_from(CreateMemberRequest {
+                preferred_communications: communication_values(&[1, number]),
+                ..input("a@example.org")
+            });
+            assert!(matches!(create, Err(error) if error.code() == Code::InvalidArgument));
+            let update = UpdateMember::try_from(UpdateMemberRequest {
+                member_id: 1,
+                preferred_communications: communication_values(&[number]),
+                ..Default::default()
+            });
+            assert!(matches!(update, Err(error) if error.code() == Code::InvalidArgument));
+        }
+    }
+
+    #[test]
+    fn upsert_preserves_omitted_preferences_and_replaces_supplied_preferences() {
+        let mut before = stored(1);
+        before.preferred_communications = vec![CommunicationMethod::Email];
+        for (requested, expected) in [
+            (None, vec![CommunicationMethod::Email]),
+            (communication_values(&[]), vec![]),
+            (
+                communication_values(&[2]),
+                vec![CommunicationMethod::PhoneNumber],
+            ),
+        ] {
+            let created = CreateMember::try_from(CreateMemberRequest {
+                preferred_communications: requested,
+                ..input("a@example.org")
+            })
+            .unwrap();
+            let UpsertWrite::Update(update) = UpsertWrite::new(created, Some(1)) else {
+                panic!("expected update")
+            };
+            assert_eq!(
+                update.apply(&before).unwrap().preferred_communications,
+                expected
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn preference_order_and_duplicates_do_not_create_bulk_changes() {
+        let mut member = stored(1);
+        member.preferred_communications =
+            vec![CommunicationMethod::Email, CommunicationMethod::Discord];
+        let service = MembersAdminService::new(
+            FakeMembersRepository::Stored(vec![member]),
+            10,
+            Duration::from_secs(1),
+        );
+        let outcome = service
+            .apply_operation(operation(Operation::Update(UpdateMemberRequest {
+                member_id: 1,
+                preferred_communications: communication_values(&[3, 1, 3]),
+                ..Default::default()
+            })))
+            .await
+            .unwrap();
+        assert!(matches!(outcome, Outcome::Unchanged(_)));
+        let outcome = service
+            .apply_operation(operation(Operation::Update(UpdateMemberRequest {
+                member_id: 1,
+                preferred_communications: communication_values(&[]),
+                ..Default::default()
+            })))
+            .await
+            .unwrap();
+        let Outcome::Updated(update) = outcome else {
+            panic!("expected updated")
+        };
+        assert_eq!(
+            update.changed_fields.unwrap().paths,
+            ["preferred_communications"]
+        );
+        assert!(update.after.unwrap().preferred_communications.is_none());
+        let outcome = service
+            .apply_operation(operation(Operation::Create(CreateMemberRequest {
+                preferred_communications: communication_values(&[5, 1]),
+                ..input("new@example.org")
+            })))
+            .await
+            .unwrap();
+        let Outcome::Created(created) = outcome else {
+            panic!("expected created")
+        };
+        assert_eq!(
+            created.member.unwrap().preferred_communications,
+            communication_values(&[1, 5])
+        );
+    }
+
     #[test]
     fn role_can_be_omitted_set_or_cleared() {
         use crate::domain::members::MemberRole;
@@ -1189,6 +1380,7 @@ mod tests {
             grad_date: Some("Spring 2028".into()),
             profile: Some(format!("notes {id}")),
             role: None,
+            preferred_communications: vec![],
             updated_at: DateTime::UNIX_EPOCH,
             archived_at: (id == 2).then_some(DateTime::UNIX_EPOCH),
         }

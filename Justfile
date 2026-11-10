@@ -9,6 +9,11 @@ migrate *args="up":
 migrate-stg *args="up":
     @just _migrate {{ args }}
 
+clear-stg:
+    @test "$DATABASE_NAME" = "members-stg" || { echo "Refusing to clear a database other than members-stg" >&2; exit 1; }
+    @bun run .github/scripts/src/clear-staging/reset-schema.ts
+    @just _migrate up
+
 migrate-prod *args="up":
     @just _migrate {{ args }}
 

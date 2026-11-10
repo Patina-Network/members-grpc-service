@@ -47,7 +47,9 @@ message SensitiveMember {
   optional members.MemberRole role = 15;
   optional string school = 16;
   optional string grad_date = 17;
-  members.PreferredCommunications preferred_communications = 18;
+  // Unset when the member has no stored preferences; never returned as an
+  // empty `values` list.
+  optional members.PreferredCommunications preferred_communications = 18;
 }
 
 message GetSensitiveMemberResponse { SensitiveMember member = 1; }
@@ -75,7 +77,8 @@ message CreateMemberRequest {
   optional members.MemberRole role = 12;
   optional string school = 13;
   optional string grad_date = 14;
-  members.PreferredCommunications preferred_communications = 15;
+  // Unset or empty `values` = no preferences stored.
+  optional members.PreferredCommunications preferred_communications = 15;
 }
 
 message CreateMemberResponse { SensitiveMember member = 1; }
@@ -106,7 +109,7 @@ message UpdateMemberRequest {
   optional string school = 14;
   optional string grad_date = 15;
   // Absent = unchanged; present with empty values = clear; otherwise replace.
-  members.PreferredCommunications preferred_communications = 16;
+  optional members.PreferredCommunications preferred_communications = 16;
 }
 
 message UpdateMemberResponse { SensitiveMember member = 1; }

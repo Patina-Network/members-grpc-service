@@ -9,7 +9,7 @@ pub enum MemberRole {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, sqlx::Type)]
-#[sqlx(type_name = "\"CommunicationMethod\"")]
+#[sqlx(type_name = "communication_method")]
 pub enum CommunicationMethod {
     Email,
     PhoneNumber,

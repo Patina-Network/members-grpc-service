@@ -1,2 +1,2 @@
-DROP TABLE "UserPreferredCommunication";
-DROP TYPE "CommunicationMethod";
+DROP TABLE user_preferred_communication;
+DROP TYPE communication_method;

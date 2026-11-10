@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use chrono::Utc;
 use sqlx::PgPool;
 
@@ -107,49 +109,87 @@ impl PgMembersRepository {
         Self { pool }
     }
 
-    async fn load_preferences<'e, E>(members: &mut [Member], executor: E) -> Result<(), sqlx::Error>
+    /// Batch-loads stored preferences for `member_ids`, keyed by member id.
+    /// Members without preferences are absent from the map.
+    async fn load_preferences<'e, E>(
+        &self,
+        member_ids: &[i32],
+        executor: E,
+    ) -> Result<HashMap<i32, Vec<CommunicationMethod>>, sqlx::Error>
     where
         E: sqlx::Executor<'e, Database = sqlx::Postgres>,
     {
-        if members.is_empty() {
-            return Ok(());
+        let mut preferences = HashMap::<i32, Vec<CommunicationMethod>>::new();
+        if member_ids.is_empty() {
+            return Ok(preferences);
         }
-        let ids: Vec<_> = members.iter().map(|member| member.id).collect();
         let rows = sqlx::query!(
-            r#"SELECT "memberId" AS member_id, method AS "method: CommunicationMethod"
-               FROM "UserPreferredCommunication"
-               WHERE "memberId" = ANY($1) ORDER BY "memberId", method"#,
-            &ids,
+            r#"
+            SELECT
+                member_id,
+                method AS "method: CommunicationMethod"
+            FROM
+                user_preferred_communication
+            WHERE
+                member_id = ANY($1)
+            ORDER BY
+                member_id,
+                method
+            "#,
+            member_ids,
         )
         .fetch_all(executor)
         .await?;
-        let mut preferences = std::collections::HashMap::<i32, Vec<CommunicationMethod>>::new();
         for row in rows {
             preferences
                 .entry(row.member_id)
                 .or_default()
                 .push(row.method);
         }
-        for member in members {
-            member.preferred_communications = preferences.remove(&member.id).unwrap_or_default();
-        }
-        Ok(())
+        Ok(preferences)
+    }
+
+    /// Loads stored preferences for a single member.
+    async fn load_member_preferences<'e, E>(
+        &self,
+        member_id: i32,
+        executor: E,
+    ) -> Result<Vec<CommunicationMethod>, sqlx::Error>
+    where
+        E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+    {
+        Ok(self
+            .load_preferences(&[member_id], executor)
+            .await?
+            .remove(&member_id)
+            .unwrap_or_default())
     }
 
     async fn replace_preferences(
+        &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
         member_id: i32,
         values: &[CommunicationMethod],
     ) -> Result<(), sqlx::Error> {
         sqlx::query!(
-            r#"DELETE FROM "UserPreferredCommunication" WHERE "memberId" = $1"#,
+            r#"
+            DELETE FROM
+                user_preferred_communication
+            WHERE
+                member_id = $1
+            "#,
             member_id
         )
         .execute(&mut **tx)
         .await?;
         sqlx::query!(
-            r#"INSERT INTO "UserPreferredCommunication" ("memberId", method)
-                       SELECT $1, unnest($2::"CommunicationMethod"[])"#,
+            r#"
+            INSERT INTO user_preferred_communication
+                (member_id, method)
+            SELECT
+                $1,
+                unnest($2::communication_method[])
+            "#,
             member_id,
             values as &[CommunicationMethod],
         )
@@ -196,7 +236,8 @@ impl PgMembersRepository {
         .fetch_one(&mut **tx)
         .await?
         .into();
-        Self::load_preferences(std::slice::from_mut(&mut before), &mut **tx).await?;
+        before.preferred_communications =
+            self.load_member_preferences(before.id, &mut **tx).await?;
 
         let after = input.apply(&before)?;
 
@@ -272,7 +313,8 @@ impl PgMembersRepository {
         .await?
         .into();
         if preferences != before.preferred_communications {
-            Self::replace_preferences(tx, before.id, &preferences).await?;
+            self.replace_preferences(tx, before.id, &preferences)
+                .await?;
         }
         after.preferred_communications = preferences;
 
@@ -353,12 +395,15 @@ impl PgMembersRepository {
             .await?;
 
             let mut existing: Member = existing.into();
-            Self::load_preferences(std::slice::from_mut(&mut existing), &self.pool).await?;
+            existing.preferred_communications = self
+                .load_member_preferences(existing.id, &self.pool)
+                .await?;
             return Ok((existing, false));
         };
 
         let mut stored: Member = stored.into();
-        Self::load_preferences(std::slice::from_mut(&mut stored), &self.pool).await?;
+        stored.preferred_communications =
+            self.load_member_preferences(stored.id, &self.pool).await?;
         Ok((stored, true))
     }
 }
@@ -465,7 +510,8 @@ impl MembersRepository for PgMembersRepository {
         }?;
         let mut member = row.map(Member::from);
         if let Some(member) = &mut member {
-            Self::load_preferences(std::slice::from_mut(member), &self.pool).await?;
+            member.preferred_communications =
+                self.load_member_preferences(member.id, &self.pool).await?;
         }
         Ok(member)
     }
@@ -514,7 +560,11 @@ impl MembersRepository for PgMembersRepository {
         .fetch_all(&self.pool)
         .await?;
         let mut members: Vec<Member> = rows.into_iter().map(Into::into).collect();
-        Self::load_preferences(&mut members, &self.pool).await?;
+        let ids: Vec<i32> = members.iter().map(|member| member.id).collect();
+        let mut preferences = self.load_preferences(&ids, &self.pool).await?;
+        for member in &mut members {
+            member.preferred_communications = preferences.remove(&member.id).unwrap_or_default();
+        }
         Ok(members)
     }
 
@@ -570,7 +620,8 @@ impl MembersRepository for PgMembersRepository {
         .await?
         .into();
         if !preferences.is_empty() {
-            Self::replace_preferences(&mut tx, member.id, &preferences).await?;
+            self.replace_preferences(&mut tx, member.id, &preferences)
+                .await?;
         }
         member.preferred_communications = preferences;
         tx.commit().await?;

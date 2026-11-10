@@ -1,9 +1,9 @@
-CREATE TYPE "CommunicationMethod" AS ENUM (
+CREATE TYPE communication_method AS ENUM (
     'Email', 'PhoneNumber', 'Discord', 'Instagram', 'LinkedIn'
 );
 
-CREATE TABLE "UserPreferredCommunication" (
-    "memberId" INTEGER NOT NULL REFERENCES "Member"(id) ON DELETE CASCADE,
-    method "CommunicationMethod" NOT NULL,
-    PRIMARY KEY ("memberId", method)
+CREATE TABLE user_preferred_communication (
+    member_id INTEGER NOT NULL REFERENCES "Member"(id) ON DELETE CASCADE,
+    method communication_method NOT NULL,
+    PRIMARY KEY (member_id, method)
 );

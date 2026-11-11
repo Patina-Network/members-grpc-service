@@ -164,24 +164,15 @@ jobs:
           ENVIRONMENT: staging
           SHA: ${{ github.event.pull_request.head.sha }}
 
-  migrateDatabases:
-    name: Migrate ${{ matrix.environment }} database from main
+  migrateStaging:
+    name: Migrate staging database from main
     runs-on: ubuntu-26.04
     needs: [test, testMigrations]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     timeout-minutes: 15
 
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - environment: staging
-            secretPrefix: STAGING
-          - environment: production
-            secretPrefix: PRODUCTION
-
     concurrency:
-      group: ${{ matrix.environment }}-db-migrations
+      group: staging-db-migrations
       cancel-in-progress: false
 
     steps:
@@ -203,19 +194,19 @@ jobs:
       - name: Apply pending migrations
         uses: ./.github/composite/migrate
         with:
-          environment: ${{ matrix.environment }}
+          environment: staging
         env:
-          DATABASE_HOST: ${{ secrets[format('{0}_MIGRATION_DATABASE_HOST', matrix.secretPrefix)] }}
-          DATABASE_PORT: ${{ secrets[format('{0}_MIGRATION_DATABASE_PORT', matrix.secretPrefix)] }}
-          DATABASE_NAME: ${{ secrets[format('{0}_MIGRATION_DATABASE_NAME', matrix.secretPrefix)] }}
-          DATABASE_USER: ${{ secrets[format('{0}_MIGRATION_DATABASE_USER', matrix.secretPrefix)] }}
-          DATABASE_PASSWORD: ${{ secrets[format('{0}_MIGRATION_DATABASE_PASSWORD', matrix.secretPrefix)] }}
+          DATABASE_HOST: ${{ secrets.STAGING_MIGRATION_DATABASE_HOST }}
+          DATABASE_PORT: ${{ secrets.STAGING_MIGRATION_DATABASE_PORT }}
+          DATABASE_NAME: ${{ secrets.STAGING_MIGRATION_DATABASE_NAME }}
+          DATABASE_USER: ${{ secrets.STAGING_MIGRATION_DATABASE_USER }}
+          DATABASE_PASSWORD: ${{ secrets.STAGING_MIGRATION_DATABASE_PASSWORD }}
           DATABASE_SSLMODE: require
 
   buildUploadServerImage:
     name: Build gRPC server Docker image and deploy to Docker Hub (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
-    needs: [test, testMigrations, migrateDatabases]
+    needs: [test, testMigrations, migrateStaging]
 
     if: github.ref_name == 'main'
 

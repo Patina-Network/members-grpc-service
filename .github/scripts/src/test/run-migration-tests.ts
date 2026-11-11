@@ -30,14 +30,16 @@ async function main() {
 
   await sql`UPDATE schema_migrations SET dirty = true`;
   await sql`CREATE TABLE partial_migration (id integer)`;
-  // Each ambient database variable must be ignored by the reset connection.
-  // These databases do not exist, so a redirected connection fails the test.
-  for (const ambient of [
-    { PGDATABASE: "reset_wrong_database", PG_DATABASE: "" },
-    { PGDATABASE: "", PG_DATABASE: "reset_wrong_database" },
-  ]) {
-    await $.env({ ...env, ...ambient })`just clear-stg`;
-  }
+  await $.env({
+    ...env,
+    PGDATABASE: "reset_wrong_database",
+    PG_DATABASE: "",
+  })`just clear-stg`;
+  await $.env({
+    ...env,
+    PGDATABASE: "",
+    PG_DATABASE: "reset_wrong_database",
+  })`just clear-stg`;
 
   const [state] = await sql`
     SELECT

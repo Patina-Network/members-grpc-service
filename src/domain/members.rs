@@ -216,6 +216,27 @@ impl UpsertWrite {
     }
 }
 
+pub struct MemberSearch {
+    pub query: String,
+    pub roles: Vec<MemberRole>,
+    pub page: u32,
+    pub page_size: u32,
+}
+
+pub struct MemberSearchPage {
+    pub members: Vec<Member>,
+    pub total: u64,
+    pub matching_total: u64,
+    pub page: u32,
+}
+
+impl MemberSearch {
+    pub fn page_for(&self, matching_total: u64) -> u32 {
+        let pages = matching_total.div_ceil(u64::from(self.page_size)).max(1);
+        u64::from(self.page).min(pages) as u32
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -442,5 +463,18 @@ mod tests {
                 ..
             }) if id == "42" && name == "name"
         ));
+    }
+    #[test]
+    fn search_page_clamps_to_the_matching_results() {
+        let search = MemberSearch {
+            query: String::new(),
+            roles: vec![],
+            page: 99,
+            page_size: 10,
+        };
+        assert_eq!(search.page_for(0), 1);
+        assert_eq!(search.page_for(20), 2);
+        assert_eq!(search.page_for(21), 3);
+        assert_eq!(search.page_for(u64::MAX), 99);
     }
 }

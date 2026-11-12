@@ -5,13 +5,13 @@ use tonic::{Request, Response, Status};
 
 use crate::{
     db::members::MembersRepository,
-    domain::members::AutocompleteField,
+    domain::members::{AutocompleteField, MemberRole as StoredRole, MemberSearch},
     grpc::database_status,
     proto::members::{
         GetMemberRequest, GetMemberResponse, ListCareersRequest, ListCareersResponse,
         ListGradDatesRequest, ListGradDatesResponse, ListIndustriesRequest, ListIndustriesResponse,
         ListMembersRequest, ListMembersResponse, ListSchoolsRequest, ListSchoolsResponse, Member,
-        members_service_server,
+        MemberRole, SearchMembersRequest, SearchMembersResponse, members_service_server,
     },
 };
 
@@ -81,6 +81,51 @@ impl<R: MembersRepository> members_service_server::MembersService for MembersSer
             next_page_token,
         }
         .into())
+    }
+
+    async fn search_members(
+        &self,
+        request: Request<SearchMembersRequest>,
+    ) -> Result<Response<SearchMembersResponse>, Status> {
+        let request = request.into_inner();
+        let query = request.query.trim().to_lowercase();
+        if query.len() > 256 {
+            return Err(Status::invalid_argument("query must be at most 256 bytes"));
+        }
+        let roles = request
+            .roles
+            .into_iter()
+            .map(|role| match MemberRole::try_from(role) {
+                Ok(MemberRole::Board) => Ok(StoredRole::Board),
+                Ok(MemberRole::Mentor) => Ok(StoredRole::Mentor),
+                Ok(MemberRole::Mentee) => Ok(StoredRole::Mentee),
+                _ => Err(Status::invalid_argument("invalid member role")),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let page_size = match request.page_size {
+            0 => 10,
+            size => size.min(100),
+        };
+        let result = self
+            .repository
+            .search(MemberSearch {
+                query,
+                roles,
+                page: request.page.max(1),
+                page_size,
+            })
+            .await
+            .map_err(database_status)?;
+        let pages = result.matching_total.div_ceil(u64::from(page_size));
+        Ok(Response::new(SearchMembersResponse {
+            members: result.members.into_iter().map(Into::into).collect(),
+            total: result.total,
+            matching_total: result.matching_total,
+            page: result.page,
+            page_size,
+            pages,
+            has_next_page: u64::from(result.page) < pages,
+        }))
     }
 
     async fn list_careers(
@@ -395,6 +440,104 @@ mod tests {
             }
 
             assert_eq!(ids, expected);
+        }
+    }
+    #[tokio::test]
+    async fn search_filters_before_pagination_and_preserves_total() {
+        let mut rows: Vec<_> = (1..=30).map(stored).collect();
+        for row in &mut rows {
+            row.first_name = if row.id % 2 == 0 { "Alice" } else { "Bob" }.into();
+            row.role = Some(crate::domain::members::MemberRole::Mentor);
+        }
+        let service = MembersService::new(FakeMembersRepository::Stored(rows));
+        let response = service
+            .search_members(Request::new(SearchMembersRequest {
+                query: " ALI ".into(),
+                roles: vec![MemberRole::Mentor as i32],
+                page: 2,
+                page_size: 10,
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(response.total, 29);
+        assert_eq!(response.matching_total, 15);
+        assert_eq!(response.page, 2);
+        assert_eq!(response.pages, 2);
+        assert!(!response.has_next_page);
+        assert_eq!(
+            response
+                .members
+                .iter()
+                .map(|m| m.member_id)
+                .collect::<Vec<_>>(),
+            [10, 8, 6, 4, 2]
+        );
+        let empty = service
+            .search_members(Request::new(SearchMembersRequest {
+                query: "unknown".into(),
+                page: 99,
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(empty.total, 29);
+        assert_eq!(empty.matching_total, 0);
+        assert_eq!(empty.page, 1);
+        assert_eq!(empty.pages, 0);
+        assert!(!empty.has_next_page);
+        assert!(empty.members.is_empty());
+    }
+
+    #[tokio::test]
+    async fn search_validates_filters_before_querying() {
+        for request in [
+            SearchMembersRequest {
+                roles: vec![0],
+                ..Default::default()
+            },
+            SearchMembersRequest {
+                roles: vec![99],
+                ..Default::default()
+            },
+            SearchMembersRequest {
+                query: "x".repeat(257),
+                ..Default::default()
+            },
+        ] {
+            let error = disconnected_service()
+                .search_members(Request::new(request))
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), Code::InvalidArgument);
+        }
+        let error = disconnected_service()
+            .search_members(Request::new(SearchMembersRequest::default()))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Code::Unavailable);
+    }
+
+    #[tokio::test]
+    async fn search_returns_page_metadata_for_first_middle_and_last_pages() {
+        let service = MembersService::new(FakeMembersRepository::Stored(
+            (1..=31).map(stored).collect(),
+        ));
+        for (page, has_next_page) in [(1, true), (2, true), (3, false)] {
+            let response = service
+                .search_members(Request::new(SearchMembersRequest {
+                    page,
+                    page_size: 10,
+                    ..Default::default()
+                }))
+                .await
+                .unwrap()
+                .into_inner();
+            assert_eq!(response.pages, 3);
+            assert_eq!(response.has_next_page, has_next_page);
+            assert_eq!(response.page, page);
+            assert_eq!(response.members.len(), 10);
         }
     }
 }

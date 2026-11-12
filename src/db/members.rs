@@ -49,6 +49,7 @@ impl From<MemberRow> for Member {
             updated_at: row.updated_at,
             archived_at: row.archived_at,
             preferred_communications: vec![],
+            secondary_emails: vec![],
         }
     }
 }
@@ -165,6 +166,104 @@ impl PgMembersRepository {
             .unwrap_or_default())
     }
 
+    /// Batch-loads non-primary emails for `member_ids`, keyed by member id.
+    /// Members without secondary emails are absent from the map.
+    async fn load_secondary_emails<'e, E>(
+        &self,
+        member_ids: &[i32],
+        executor: E,
+    ) -> Result<HashMap<i32, Vec<String>>, sqlx::Error>
+    where
+        E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+    {
+        let mut emails = HashMap::<i32, Vec<String>>::new();
+        if member_ids.is_empty() {
+            return Ok(emails);
+        }
+        let rows = sqlx::query!(
+            r#"
+            SELECT
+                "memberId" AS member_id,
+                email
+            FROM
+                "UserEmails"
+            WHERE
+                "memberId" = ANY($1)
+                AND NOT "isPrimary"
+            ORDER BY
+                "memberId",
+                email COLLATE "C"
+            "#,
+            member_ids,
+        )
+        .fetch_all(executor)
+        .await?;
+        for row in rows {
+            emails.entry(row.member_id).or_default().push(row.email);
+        }
+        Ok(emails)
+    }
+
+    /// Loads non-primary emails for a single member.
+    async fn load_member_secondary_emails<'e, E>(
+        &self,
+        member_id: i32,
+        executor: E,
+    ) -> Result<Vec<String>, sqlx::Error>
+    where
+        E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+    {
+        Ok(self
+            .load_secondary_emails(&[member_id], executor)
+            .await?
+            .remove(&member_id)
+            .unwrap_or_default())
+    }
+
+    async fn insert_secondary_emails(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        member_id: i32,
+        emails: &[String],
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"
+            INSERT INTO "UserEmails"
+                ("memberId", email, "isPrimary")
+            SELECT
+                $1,
+                unnest($2::text[]),
+                false
+            "#,
+            member_id,
+            emails,
+        )
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
+    async fn insert_primary_email(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        member_id: i32,
+        email: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"
+            INSERT INTO "UserEmails"
+                ("memberId", email, "isPrimary")
+            VALUES
+                ($1, $2, true)
+            "#,
+            member_id,
+            email,
+        )
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
     async fn replace_preferences(
         &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
@@ -238,6 +337,9 @@ impl PgMembersRepository {
         .into();
         before.preferred_communications =
             self.load_member_preferences(before.id, &mut **tx).await?;
+        before.secondary_emails = self
+            .load_member_secondary_emails(before.id, &mut **tx)
+            .await?;
 
         let after = input.apply(&before)?;
 
@@ -250,6 +352,7 @@ impl PgMembersRepository {
         }
 
         let preferences = after.preferred_communications.clone();
+        let secondary_emails = after.secondary_emails.clone();
         let mut after: Member = sqlx::query_as!(
             MemberRow,
             r#"
@@ -317,6 +420,46 @@ impl PgMembersRepository {
                 .await?;
         }
         after.preferred_communications = preferences;
+
+        // UNIQUE(email) forces this order: drop old secondaries, swap the primary,
+        // then insert new secondaries. Covers promoting a secondary to primary and
+        // demoting the primary to a secondary in one request.
+        let secondaries_changed = secondary_emails != before.secondary_emails;
+        if secondaries_changed {
+            sqlx::query!(
+                r#"
+                DELETE FROM
+                    "UserEmails"
+                WHERE
+                    "memberId" = $1
+                    AND NOT "isPrimary"
+                "#,
+                before.id
+            )
+            .execute(&mut **tx)
+            .await?;
+        }
+        if after.email != before.email {
+            sqlx::query!(
+                r#"
+                DELETE FROM
+                    "UserEmails"
+                WHERE
+                    "memberId" = $1
+                    AND "isPrimary"
+                "#,
+                before.id
+            )
+            .execute(&mut **tx)
+            .await?;
+            self.insert_primary_email(tx, before.id, &after.email)
+                .await?;
+        }
+        if secondaries_changed && !secondary_emails.is_empty() {
+            self.insert_secondary_emails(tx, before.id, &secondary_emails)
+                .await?;
+        }
+        after.secondary_emails = secondary_emails;
 
         Ok(UpdateResult {
             before,
@@ -398,12 +541,18 @@ impl PgMembersRepository {
             existing.preferred_communications = self
                 .load_member_preferences(existing.id, &self.pool)
                 .await?;
+            existing.secondary_emails = self
+                .load_member_secondary_emails(existing.id, &self.pool)
+                .await?;
             return Ok((existing, false));
         };
 
         let mut stored: Member = stored.into();
         stored.preferred_communications =
             self.load_member_preferences(stored.id, &self.pool).await?;
+        stored.secondary_emails = self
+            .load_member_secondary_emails(stored.id, &self.pool)
+            .await?;
         Ok((stored, true))
     }
 }
@@ -512,6 +661,9 @@ impl MembersRepository for PgMembersRepository {
         if let Some(member) = &mut member {
             member.preferred_communications =
                 self.load_member_preferences(member.id, &self.pool).await?;
+            member.secondary_emails = self
+                .load_member_secondary_emails(member.id, &self.pool)
+                .await?;
         }
         Ok(member)
     }
@@ -562,8 +714,10 @@ impl MembersRepository for PgMembersRepository {
         let mut members: Vec<Member> = rows.into_iter().map(Into::into).collect();
         let ids: Vec<i32> = members.iter().map(|member| member.id).collect();
         let mut preferences = self.load_preferences(&ids, &self.pool).await?;
+        let mut secondary_emails = self.load_secondary_emails(&ids, &self.pool).await?;
         for member in &mut members {
             member.preferred_communications = preferences.remove(&member.id).unwrap_or_default();
+            member.secondary_emails = secondary_emails.remove(&member.id).unwrap_or_default();
         }
         Ok(members)
     }
@@ -572,6 +726,8 @@ impl MembersRepository for PgMembersRepository {
         let now = Utc::now();
         let mut tx = self.pool.begin().await?;
         let preferences = normalize_preferences(input.preferred_communications.unwrap_or_default());
+        let mut secondary_emails = input.secondary_emails.unwrap_or_default();
+        secondary_emails.sort();
 
         let mut member: Member = sqlx::query_as!(
             MemberRow,
@@ -624,6 +780,13 @@ impl MembersRepository for PgMembersRepository {
                 .await?;
         }
         member.preferred_communications = preferences;
+        self.insert_primary_email(&mut tx, member.id, &member.email)
+            .await?;
+        if !secondary_emails.is_empty() {
+            self.insert_secondary_emails(&mut tx, member.id, &secondary_emails)
+                .await?;
+        }
+        member.secondary_emails = secondary_emails;
         tx.commit().await?;
         Ok(member)
     }
@@ -884,6 +1047,7 @@ pub mod fake {
                     ),
                     updated_at: DateTime::UNIX_EPOCH,
                     archived_at: None,
+                    secondary_emails: input.secondary_emails.unwrap_or_default(),
                 })
             })
             .await

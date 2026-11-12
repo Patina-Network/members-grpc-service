@@ -149,6 +149,29 @@ fn clearable(
         .transpose()
 }
 
+const MAX_SECONDARY_EMAILS: usize = 10;
+
+fn clean_secondary_emails(mut emails: Vec<String>) -> Result<Vec<String>, Status> {
+    if emails.len() > MAX_SECONDARY_EMAILS {
+        return Err(Status::invalid_argument(format!(
+            "secondary_emails cannot contain more than {MAX_SECONDARY_EMAILS} emails"
+        )));
+    }
+
+    for email in &emails {
+        validate_email(email)?;
+    }
+
+    emails.sort();
+    if emails.windows(2).any(|w| w[0] == w[1]) {
+        return Err(Status::invalid_argument(
+            "secondary_emails cannot contain duplicate emails",
+        ));
+    }
+
+    Ok(emails)
+}
+
 fn parse_joined_at(value: Option<Timestamp>) -> Result<Option<DateTime<Utc>>, Status> {
     value
         .map(|value| {
@@ -222,6 +245,19 @@ impl TryFrom<CreateMemberRequest> for CreateMember {
         validate_optional(&input.industry, |value| required(value, "industry"))?;
         validate_optional(&input.profile, |value| required(value, "profile"))?;
 
+        let secondary_emails = input
+            .secondary_emails
+            .map(|list| clean_secondary_emails(list.emails))
+            .transpose()?;
+        if secondary_emails
+            .as_ref()
+            .is_some_and(|emails| emails.contains(&input.email))
+        {
+            return Err(Status::invalid_argument(
+                "secondary_emails must not contain the primary email",
+            ));
+        }
+
         Ok(Self {
             joined_at: parse_joined_at(input.joined_at)?,
             email: input.email,
@@ -241,6 +277,7 @@ impl TryFrom<CreateMemberRequest> for CreateMember {
                 .preferred_communications
                 .map(parse_preferences)
                 .transpose()?,
+            secondary_emails,
         })
     }
 }
@@ -278,6 +315,10 @@ impl TryFrom<UpdateMemberRequest> for UpdateMember {
         let industry = clearable(input.industry, |value| required(value, "industry"))?;
         let profile = clearable(input.profile, |value| required(value, "profile"))?;
         let role = input.role.map(parse_role).transpose()?;
+        let secondary_emails = input
+            .secondary_emails
+            .map(|list| clean_secondary_emails(list.emails))
+            .transpose()?;
 
         Ok(Self {
             member_id: input.member_id,
@@ -299,6 +340,7 @@ impl TryFrom<UpdateMemberRequest> for UpdateMember {
                 .preferred_communications
                 .map(parse_preferences)
                 .transpose()?,
+            secondary_emails,
         })
     }
 }
@@ -476,6 +518,10 @@ fn changed_fields(before: &StoredMember, after: &StoredMember) -> prost_types::F
             "preferred_communications",
             before.preferred_communications != after.preferred_communications,
         ),
+        (
+            "secondary_emails",
+            before.secondary_emails != after.secondary_emails,
+        ),
     ];
 
     prost_types::FieldMask {
@@ -515,7 +561,10 @@ mod tests {
     use crate::db::members::fake::FakeMembersRepository;
     use tonic::Code;
 
-    use crate::{grpc::timestamp, proto::members::admin::UpsertMemberRequest};
+    use crate::{
+        grpc::timestamp,
+        proto::members::{SecondaryEmails, admin::UpsertMemberRequest},
+    };
 
     use super::{members_admin_service_server::MembersAdminService as _, *};
 
@@ -1205,6 +1254,105 @@ mod tests {
     }
 
     #[test]
+    fn clean_secondary_emails_enforces_the_list_rules() {
+        let emails = |count: usize| -> Vec<String> {
+            (0..count).map(|i| format!("m{i}@example.org")).collect()
+        };
+
+        for (input, message) in [
+            (
+                emails(11),
+                "secondary_emails cannot contain more than 10 emails",
+            ),
+            (
+                vec!["not-an-email".into()],
+                "email must be a valid email address",
+            ),
+            (
+                vec!["a@example.org".into(), "a@example.org".into()],
+                "secondary_emails cannot contain duplicate emails",
+            ),
+        ] {
+            let Err(error) = super::clean_secondary_emails(input) else {
+                panic!("expected {message:?}");
+            };
+            assert_eq!(error.code(), Code::InvalidArgument);
+            assert_eq!(error.message(), message);
+        }
+
+        assert_eq!(
+            super::clean_secondary_emails(emails(10)).unwrap(),
+            emails(10)
+        );
+        assert_eq!(
+            super::clean_secondary_emails(vec![
+                "c@example.org".into(),
+                "a@example.org".into(),
+                "b@example.org".into(),
+            ])
+            .unwrap(),
+            ["a@example.org", "b@example.org", "c@example.org"]
+        );
+        assert!(super::clean_secondary_emails(vec![]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn secondary_emails_convert_on_create_and_update() {
+        let Err(error) = CreateMember::try_from(CreateMemberRequest {
+            secondary_emails: Some(SecondaryEmails {
+                emails: vec!["a@example.org".into()],
+            }),
+            ..input("a@example.org")
+        }) else {
+            panic!("expected the primary email in secondary_emails to be rejected");
+        };
+        assert_eq!(error.code(), Code::InvalidArgument);
+        assert_eq!(
+            error.message(),
+            "secondary_emails must not contain the primary email"
+        );
+
+        let created = CreateMember::try_from(CreateMemberRequest {
+            secondary_emails: Some(SecondaryEmails {
+                emails: vec!["c@example.org".into(), "b@example.org".into()],
+            }),
+            ..input("a@example.org")
+        })
+        .unwrap();
+        assert_eq!(
+            created.secondary_emails.unwrap(),
+            ["b@example.org", "c@example.org"]
+        );
+
+        let update = |emails: Option<&[&str]>| {
+            UpdateMember::try_from(UpdateMemberRequest {
+                member_id: 1,
+                secondary_emails: emails.map(|emails| SecondaryEmails {
+                    emails: emails.iter().map(|email| email.to_string()).collect(),
+                }),
+                ..Default::default()
+            })
+        };
+
+        assert_eq!(update(None).unwrap().secondary_emails, None);
+        assert_eq!(update(Some(&[])).unwrap().secondary_emails, Some(vec![]));
+        assert_eq!(
+            update(Some(&["c@example.org", "a@example.org"]))
+                .unwrap()
+                .secondary_emails,
+            Some(vec![
+                "a@example.org".to_string(),
+                "c@example.org".to_string()
+            ])
+        );
+
+        let Err(error) = update(Some(&["not-an-email"])) else {
+            panic!("expected an invalid secondary email to be rejected");
+        };
+        assert_eq!(error.code(), Code::InvalidArgument);
+    }
+
+    #[test]
     fn changed_fields_lists_only_differing_fields() {
         let before = StoredMember {
             discord_id: Some("1".into()),
@@ -1383,6 +1531,7 @@ mod tests {
             preferred_communications: vec![],
             updated_at: DateTime::UNIX_EPOCH,
             archived_at: (id == 2).then_some(DateTime::UNIX_EPOCH),
+            secondary_emails: vec![format!("m{id}@secondary.example.org")],
         }
     }
 

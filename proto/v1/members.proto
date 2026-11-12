@@ -11,6 +11,7 @@ service MembersService {
   rpc getMember(GetMemberRequest) returns (GetMemberResponse);
 
   rpc listMembers(ListMembersRequest) returns (ListMembersResponse);
+  rpc searchMembers(SearchMembersRequest) returns (SearchMembersResponse);
 
   // Distinct careers stored on members, most common first, for UI autocomplete.
   rpc listCareers(ListCareersRequest) returns (ListCareersResponse);
@@ -125,3 +126,20 @@ message ListGradDatesRequest {
   uint32 limit = 2;
 }
 message ListGradDatesResponse { repeated string grad_dates = 1; }
+
+message SearchMembersRequest {
+  string query = 1;
+  repeated MemberRole roles = 2;
+  uint32 page = 3;
+  uint32 page_size = 4;
+}
+
+message SearchMembersResponse {
+  repeated Member members = 1;
+  uint64 total = 2;
+  uint64 matching_total = 3;
+  uint32 page = 4;
+  uint32 page_size = 5;
+  uint64 pages = 6;
+  bool has_next_page = 7;
+}

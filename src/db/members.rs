@@ -5,9 +5,10 @@ use sqlx::PgPool;
 
 use crate::domain::members::{
     AutocompleteField, CommunicationMethod, CreateMember, Member, MemberIdentifier, MemberRole,
-    OperationOutcome, UpdateMember, normalize_preferences,
+    MemberSearch, MemberSearchPage, OperationOutcome, UpdateMember, normalize_preferences,
 };
 
+#[derive(sqlx::FromRow)]
 struct MemberRow {
     id: i32,
     email: String,
@@ -65,6 +66,11 @@ pub trait MembersRepository: Send + Sync + 'static {
         after: Option<i32>,
         limit: i64,
     ) -> impl Future<Output = Result<Vec<Member>, sqlx::Error>> + Send;
+
+    fn search(
+        &self,
+        search: MemberSearch,
+    ) -> impl Future<Output = Result<MemberSearchPage, sqlx::Error>> + Send;
 
     fn create_member(
         &self,
@@ -568,6 +574,74 @@ impl MembersRepository for PgMembersRepository {
         Ok(members)
     }
 
+    async fn search(&self, search: MemberSearch) -> Result<MemberSearchPage, sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            .execute(&mut *tx)
+            .await?;
+        let total: i64 =
+            sqlx::query_scalar(r#"SELECT count(*) FROM "Member" WHERE "archivedAt" IS NULL"#)
+                .fetch_one(&mut *tx)
+                .await?;
+        let matching_total: i64 = sqlx::query_scalar(
+            r#"SELECT count(*) FROM "Member" WHERE
+            "archivedAt" IS NULL
+            AND (cardinality($2::"MemberRole"[]) = 0 OR role = ANY($2))
+            AND ($1 = '' OR EXISTS (
+                SELECT 1 FROM unnest(ARRAY[
+                    "firstName", "lastName", email, "discordId", "discordUsername",
+                    "instagramUsername", "linkedinUsername", id::text
+                ]) AS field(value)
+                WHERE starts_with(lower(value), $1)
+            ))
+        "#,
+        )
+        .bind(&search.query)
+        .bind(&search.roles)
+        .fetch_one(&mut *tx)
+        .await?;
+        let page = search.page_for(matching_total as u64);
+        let rows: Vec<MemberRow> = sqlx::query_as(
+            r#"
+            SELECT id, email, "firstName" AS first_name, "lastName" AS last_name,
+                "joinedAt" AS joined_at, "discordId" AS discord_id,
+                "discordUsername" AS discord_username, "linkedinUsername" AS linkedin_username,
+                "instagramUsername" AS instagram_username, career, industry, profile, role,
+                school, grad_date, "updatedAt" AS updated_at, "archivedAt" AS archived_at
+            FROM "Member" WHERE
+            "archivedAt" IS NULL
+            AND (cardinality($2::"MemberRole"[]) = 0 OR role = ANY($2))
+            AND ($1 = '' OR EXISTS (
+                SELECT 1 FROM unnest(ARRAY[
+                    "firstName", "lastName", email, "discordId", "discordUsername",
+                    "instagramUsername", "linkedinUsername", id::text
+                ]) AS field(value)
+                WHERE starts_with(lower(value), $1)
+            ))
+         ORDER BY id DESC LIMIT $3 OFFSET $4
+        "#,
+        )
+        .bind(&search.query)
+        .bind(&search.roles)
+        .bind(i64::from(search.page_size()))
+        .bind(i64::from(page - 1) * i64::from(search.page_size()))
+        .fetch_all(&mut *tx)
+        .await?;
+        let mut members: Vec<Member> = rows.into_iter().map(Into::into).collect();
+        let ids: Vec<i32> = members.iter().map(|member| member.id).collect();
+        let mut preferences = self.load_preferences(&ids, &mut *tx).await?;
+        for member in &mut members {
+            member.preferred_communications = preferences.remove(&member.id).unwrap_or_default();
+        }
+        tx.commit().await?;
+        Ok(MemberSearchPage {
+            members,
+            total: total as u64,
+            matching_total: matching_total as u64,
+            page,
+        })
+    }
+
     async fn create_member(&self, input: CreateMember) -> Result<Member, sqlx::Error> {
         let now = Utc::now();
         let mut tx = self.pool.begin().await?;
@@ -857,6 +931,49 @@ pub mod fake {
                     .take(limit as usize)
                     .cloned()
                     .collect())
+            })
+            .await
+        }
+
+        async fn search(&self, search: MemberSearch) -> Result<MemberSearchPage, sqlx::Error> {
+            self.with(|members| {
+                let active: Vec<_> = members.iter().filter(|m| m.archived_at.is_none()).collect();
+                let total = active.len() as u64;
+                let mut matching: Vec<_> = active
+                    .into_iter()
+                    .filter(|m| {
+                        (search.roles.is_empty()
+                            || m.role.is_some_and(|role| search.roles.contains(&role)))
+                            && [
+                                Some(m.first_name.as_str()),
+                                Some(m.last_name.as_str()),
+                                Some(m.email.as_str()),
+                                m.discord_id.as_deref(),
+                                m.discord_username.as_deref(),
+                                m.instagram_username.as_deref(),
+                                m.linkedin_username.as_deref(),
+                                Some(&m.id.to_string()),
+                            ]
+                            .into_iter()
+                            .flatten()
+                            .any(|v| v.to_lowercase().starts_with(&search.query))
+                    })
+                    .collect();
+                matching.sort_by_key(|m| std::cmp::Reverse(m.id));
+                let matching_total = matching.len() as u64;
+                let page = search.page_for(matching_total);
+                let members = matching
+                    .into_iter()
+                    .skip(((page - 1) * search.page_size()) as usize)
+                    .take(search.page_size() as usize)
+                    .cloned()
+                    .collect();
+                Ok(MemberSearchPage {
+                    members,
+                    total,
+                    matching_total,
+                    page,
+                })
             })
             .await
         }

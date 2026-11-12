@@ -27,5 +27,6 @@ await githubClient.sendPrMessage({
 ### Available PR Commands
 
 - \`/migrate\` - Applies this PR's database migrations to the staging DB (can only be run by someone on \`@Patina-Network/dino\`).
+- \`/clear\` - Deletes all staging data and reapplies this PR's database migrations to \`members-stg\` (can only be run by someone on \`@Patina-Network/dino\`). Does not seed data or deploy the PR.
 `.trim(),
 });

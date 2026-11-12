@@ -13,7 +13,8 @@ on:
 
 concurrency:
   group: ci-cd-${{ github.ref }}
-  cancel-in-progress: true
+  # Never interrupt a main run while it may be applying database migrations.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   testMigrations:
@@ -163,10 +164,49 @@ jobs:
           ENVIRONMENT: staging
           SHA: ${{ github.event.pull_request.head.sha }}
 
+  migrateStaging:
+    name: Migrate staging database from main
+    runs-on: ubuntu-26.04
+    needs: [test, testMigrations]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    timeout-minutes: 15
+
+    concurrency:
+      group: staging-db-migrations
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Setup Pipeline
+        uses: tahminator/pipeline/actions/setup@aa4f2ffcca89a9dcad96c1eac1e57b5a533f8c26 # 1.0.100
+        with:
+          INSTALL_JUST: true
+          INSTALL_MIGRATE: "true"
+          HEADSCALE_ADDRESS: ${{ secrets.HEADSCALE_ADDRESS }}
+          HEADSCALE_USER: ${{ secrets.HEADSCALE_USER }}
+          HEADSCALE_PREAUTHKEY: ${{ secrets.HEADSCALE_PREAUTHKEY }}
+
+      - name: Apply pending migrations
+        uses: ./.github/composite/migrate
+        with:
+          environment: staging
+        env:
+          DATABASE_HOST: ${{ secrets.STAGING_MIGRATION_DATABASE_HOST }}
+          DATABASE_PORT: ${{ secrets.STAGING_MIGRATION_DATABASE_PORT }}
+          DATABASE_NAME: ${{ secrets.STAGING_MIGRATION_DATABASE_NAME }}
+          DATABASE_USER: ${{ secrets.STAGING_MIGRATION_DATABASE_USER }}
+          DATABASE_PASSWORD: ${{ secrets.STAGING_MIGRATION_DATABASE_PASSWORD }}
+          DATABASE_SSLMODE: require
+
   buildUploadServerImage:
     name: Build gRPC server Docker image and deploy to Docker Hub (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
-    needs: [test, testMigrations]
+    needs: [test, testMigrations, migrateStaging]
 
     if: github.ref_name == 'main'
 

@@ -1,0 +1,88 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/SchemaStore/schemastore/refs/heads/master/src/schemas/json/github-workflow.json
+name: Clear Staging Database
+run-name: Clear staging database from PR #${{ inputs.prId }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      prId:
+        description: PR whose migrations should rebuild staging after deleting all data
+        required: true
+        type: string
+      repository:
+        description: The repository from which the slash command was dispatched
+        required: true
+        type: string
+      comment-id:
+        description: The comment-id of the slash command
+        required: true
+        type: string
+      author:
+        description: The author that triggered this action
+        required: true
+        type: string
+
+concurrency:
+  group: staging-db-migrations
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  clear:
+    if: github.actor == 'pat-agent[bot]'
+    name: Clear staging DB
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - name: Get PR head SHA
+        id: pr-head
+        uses: actions/github-script@v9
+        env:
+          PR_ID: ${{ inputs.prId }}
+        with:
+          result-encoding: string
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: Number(process.env.PR_ID),
+            });
+            if (pr.head.repo.full_name !== context.repo.owner + '/' + context.repo.repo) {
+              throw new Error('PR head must belong to this repository');
+            }
+            return pr.head.sha;
+
+      - name: Checkout pull request
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.pr-head.outputs.result }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Pipeline
+        uses: tahminator/pipeline/actions/setup@aa4f2ffcca89a9dcad96c1eac1e57b5a533f8c26 # 1.0.100
+        with:
+          LINT_CI: true
+          INSTALL_JUST: true
+          INSTALL_MIGRATE: "true"
+          HEADSCALE_ADDRESS: ${{ secrets.HEADSCALE_ADDRESS }}
+          HEADSCALE_USER: ${{ secrets.HEADSCALE_USER }}
+          HEADSCALE_PREAUTHKEY: ${{ secrets.HEADSCALE_PREAUTHKEY }}
+
+      - name: Clear staging database
+        env:
+          AUTHOR: ${{ inputs.author }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          _GITHUB_APP_APP_ID: ${{ secrets._GITHUB_APP_APP_ID }}
+          _GITHUB_APP_INSTALLATION_ID: ${{ secrets._GITHUB_APP_INSTALLATION_ID }}
+          _GITHUB_APP_PEM_CONTENT: ${{ secrets._GITHUB_APP_PEM_CONTENT }}
+          DATABASE_HOST: ${{ secrets.STAGING_MIGRATION_DATABASE_HOST }}
+          DATABASE_PORT: ${{ secrets.STAGING_MIGRATION_DATABASE_PORT }}
+          DATABASE_NAME: ${{ secrets.STAGING_MIGRATION_DATABASE_NAME }}
+          DATABASE_USER: ${{ secrets.STAGING_MIGRATION_DATABASE_USER }}
+          DATABASE_PASSWORD: ${{ secrets.STAGING_MIGRATION_DATABASE_PASSWORD }}
+          DATABASE_SSLMODE: require
+        run: bun run .github/scripts/src/clear-staging --author="$AUTHOR" --runUrl="$RUN_URL"

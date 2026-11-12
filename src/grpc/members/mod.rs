@@ -92,28 +92,17 @@ impl<R: MembersRepository> members_service_server::MembersService for MembersSer
         if query.len() > 256 {
             return Err(Status::invalid_argument("query must be at most 256 bytes"));
         }
-        let roles = request
-            .roles
-            .into_iter()
-            .map(|role| match MemberRole::try_from(role) {
-                Ok(MemberRole::Board) => Ok(StoredRole::Board),
-                Ok(MemberRole::Mentor) => Ok(StoredRole::Mentor),
-                Ok(MemberRole::Mentee) => Ok(StoredRole::Mentee),
-                _ => Err(Status::invalid_argument("invalid member role")),
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let roles = search_roles(request.roles)?;
         let page_size = match request.page_size {
             0 => 10,
             size => size.min(100),
         };
         let result = self
             .repository
-            .search(MemberSearch {
-                query,
-                roles,
-                page: request.page.max(1),
-                page_size,
-            })
+            .search(
+                MemberSearch::new(query, roles, request.page.max(1), page_size)
+                    .map_err(Status::invalid_argument)?,
+            )
             .await
             .map_err(database_status)?;
         let pages = result.matching_total.div_ceil(u64::from(page_size));
@@ -173,6 +162,21 @@ impl<R: MembersRepository> members_service_server::MembersService for MembersSer
 
         Ok(ListGradDatesResponse { grad_dates }.into())
     }
+}
+
+fn search_roles(roles: Vec<i32>) -> Result<Vec<StoredRole>, Status> {
+    roles.into_iter().try_fold(Vec::new(), |mut roles, role| {
+        let role = match MemberRole::try_from(role) {
+            Ok(MemberRole::Board) => StoredRole::Board,
+            Ok(MemberRole::Mentor) => StoredRole::Mentor,
+            Ok(MemberRole::Mentee) => StoredRole::Mentee,
+            _ => return Err(Status::invalid_argument("invalid member role")),
+        };
+        if !roles.contains(&role) {
+            roles.push(role);
+        }
+        Ok(roles)
+    })
 }
 
 #[cfg(test)]
@@ -539,5 +543,31 @@ mod tests {
             assert_eq!(response.page, page);
             assert_eq!(response.members.len(), 10);
         }
+    }
+    #[test]
+    fn search_roles_deduplicate_and_still_reject_invalid_values() {
+        let mentor = MemberRole::Mentor as i32;
+        let board = MemberRole::Board as i32;
+        assert_eq!(
+            search_roles(vec![mentor, board, mentor]).unwrap(),
+            [StoredRole::Mentor, StoredRole::Board]
+        );
+        assert_eq!(
+            search_roles(vec![mentor, mentor, 0]).unwrap_err().code(),
+            Code::InvalidArgument
+        );
+    }
+
+    #[tokio::test]
+    async fn search_normalizes_zero_pagination_before_repository_calls() {
+        let service = MembersService::new(FakeMembersRepository::Stored(vec![stored(1)]));
+        let response = service
+            .search_members(Request::new(SearchMembersRequest::default()))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(response.page, 1);
+        assert_eq!(response.page_size, 10);
+        assert_eq!(response.members.len(), 1);
     }
 }

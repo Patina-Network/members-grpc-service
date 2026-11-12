@@ -219,8 +219,8 @@ impl UpsertWrite {
 pub struct MemberSearch {
     pub query: String,
     pub roles: Vec<MemberRole>,
-    pub page: u32,
-    pub page_size: u32,
+    page: u32,
+    page_size: u32,
 }
 
 pub struct MemberSearchPage {
@@ -231,6 +231,27 @@ pub struct MemberSearchPage {
 }
 
 impl MemberSearch {
+    pub fn new(
+        query: String,
+        roles: Vec<MemberRole>,
+        page: u32,
+        page_size: u32,
+    ) -> Result<Self, &'static str> {
+        if page == 0 || page_size == 0 {
+            return Err("page and page_size must be positive");
+        }
+        Ok(Self {
+            query,
+            roles,
+            page,
+            page_size,
+        })
+    }
+
+    pub fn page_size(&self) -> u32 {
+        self.page_size
+    }
+
     pub fn page_for(&self, matching_total: u64) -> u32 {
         let pages = matching_total.div_ceil(u64::from(self.page_size)).max(1);
         u64::from(self.page).min(pages) as u32
@@ -466,15 +487,16 @@ mod tests {
     }
     #[test]
     fn search_page_clamps_to_the_matching_results() {
-        let search = MemberSearch {
-            query: String::new(),
-            roles: vec![],
-            page: 99,
-            page_size: 10,
-        };
+        let search = MemberSearch::new(String::new(), vec![], 99, 10).unwrap();
         assert_eq!(search.page_for(0), 1);
         assert_eq!(search.page_for(20), 2);
         assert_eq!(search.page_for(21), 3);
         assert_eq!(search.page_for(u64::MAX), 99);
+    }
+    #[test]
+    fn search_rejects_zero_pagination_values() {
+        for (page, page_size) in [(0, 10), (1, 0), (0, 0)] {
+            assert!(MemberSearch::new(String::new(), vec![], page, page_size).is_err());
+        }
     }
 }

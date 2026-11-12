@@ -623,8 +623,8 @@ impl MembersRepository for PgMembersRepository {
         )
         .bind(&search.query)
         .bind(&search.roles)
-        .bind(i64::from(search.page_size))
-        .bind(i64::from(page - 1) * i64::from(search.page_size))
+        .bind(i64::from(search.page_size()))
+        .bind(i64::from(page - 1) * i64::from(search.page_size()))
         .fetch_all(&mut *tx)
         .await?;
         let mut members: Vec<Member> = rows.into_iter().map(Into::into).collect();
@@ -964,8 +964,8 @@ pub mod fake {
                 let page = search.page_for(matching_total);
                 let members = matching
                     .into_iter()
-                    .skip(((page - 1) * search.page_size) as usize)
-                    .take(search.page_size as usize)
+                    .skip(((page - 1) * search.page_size()) as usize)
+                    .take(search.page_size() as usize)
                     .cloned()
                     .collect();
                 Ok(MemberSearchPage {

@@ -48,7 +48,7 @@ message PreferredCommunications {
   repeated CommunicationMethod values = 1;
 }
 
-// Sorted set of unique non-primary emails.
+// Unordered set of unique non-primary emails.
 message SecondaryEmails {
   repeated string emails = 1;
 }

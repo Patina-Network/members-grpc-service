@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::HashSet, time::Duration};
 
 use chrono::{DateTime, Utc};
 use prost_types::Timestamp;
@@ -151,7 +151,7 @@ fn clearable(
 
 const MAX_SECONDARY_EMAILS: usize = 10;
 
-fn clean_secondary_emails(mut emails: Vec<String>) -> Result<Vec<String>, Status> {
+fn clean_secondary_emails(emails: Vec<String>) -> Result<Vec<String>, Status> {
     if emails.len() > MAX_SECONDARY_EMAILS {
         return Err(Status::invalid_argument(format!(
             "secondary_emails cannot contain more than {MAX_SECONDARY_EMAILS} emails"
@@ -162,8 +162,8 @@ fn clean_secondary_emails(mut emails: Vec<String>) -> Result<Vec<String>, Status
         validate_email(email)?;
     }
 
-    emails.sort();
-    if emails.windows(2).any(|w| w[0] == w[1]) {
+    let mut seen = HashSet::new();
+    if !emails.iter().all(|email| seen.insert(email)) {
         return Err(Status::invalid_argument(
             "secondary_emails cannot contain duplicate emails",
         ));
@@ -1291,7 +1291,7 @@ mod tests {
                 "b@example.org".into(),
             ])
             .unwrap(),
-            ["a@example.org", "b@example.org", "c@example.org"]
+            ["c@example.org", "a@example.org", "b@example.org"]
         );
         assert!(super::clean_secondary_emails(vec![]).unwrap().is_empty());
     }
@@ -1321,7 +1321,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             created.secondary_emails.unwrap(),
-            ["b@example.org", "c@example.org"]
+            ["c@example.org", "b@example.org"]
         );
 
         let update = |emails: Option<&[&str]>| {
@@ -1341,8 +1341,8 @@ mod tests {
                 .unwrap()
                 .secondary_emails,
             Some(vec![
-                "a@example.org".to_string(),
-                "c@example.org".to_string()
+                "c@example.org".to_string(),
+                "a@example.org".to_string()
             ])
         );
 

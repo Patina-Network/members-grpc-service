@@ -184,7 +184,13 @@ impl UpdateMember {
             after.email = email;
         }
         if let Some(secondary_emails) = self.secondary_emails {
-            after.secondary_emails = secondary_emails;
+            let reordered = secondary_emails.len() == after.secondary_emails.len()
+                && secondary_emails
+                    .iter()
+                    .all(|email| after.secondary_emails.contains(email));
+            if !reordered {
+                after.secondary_emails = secondary_emails;
+            }
         }
         if emails_touched && after.secondary_emails.contains(&after.email) {
             return Err(sqlx::Error::InvalidArgument(
@@ -490,16 +496,21 @@ mod tests {
     #[test]
     fn rewriting_the_same_secondary_emails_is_unchanged() {
         let mut before = member(None);
-        before.secondary_emails = vec!["old@example.org".into()];
+        before.secondary_emails = vec!["b@example.org".into(), "c@example.org".into()];
 
-        let after = UpdateMember {
-            secondary_emails: Some(vec!["old@example.org".into()]),
-            ..update(None, None)
+        for given in [
+            ["b@example.org", "c@example.org"],
+            ["c@example.org", "b@example.org"],
+        ] {
+            let after = UpdateMember {
+                secondary_emails: Some(given.map(String::from).to_vec()),
+                ..update(None, None)
+            }
+            .apply(&before)
+            .unwrap();
+
+            assert_eq!(after, before);
         }
-        .apply(&before)
-        .unwrap();
-
-        assert_eq!(after, before);
     }
 
     #[test]

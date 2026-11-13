@@ -190,9 +190,6 @@ impl PgMembersRepository {
             WHERE
                 "memberId" = ANY($1)
                 AND NOT "isPrimary"
-            ORDER BY
-                "memberId",
-                email COLLATE "C"
             "#,
             member_ids,
         )
@@ -726,8 +723,7 @@ impl MembersRepository for PgMembersRepository {
         let now = Utc::now();
         let mut tx = self.pool.begin().await?;
         let preferences = normalize_preferences(input.preferred_communications.unwrap_or_default());
-        let mut secondary_emails = input.secondary_emails.unwrap_or_default();
-        secondary_emails.sort();
+        let secondary_emails = input.secondary_emails.unwrap_or_default();
 
         let mut member: Member = sqlx::query_as!(
             MemberRow,

@@ -14,7 +14,7 @@ use crate::{
     },
     proto::members::{
         CommunicationMethod as ProtoMethod, GetMemberRequest, ListMembersRequest, Member,
-        MemberRole as ProtoRole, PreferredCommunications, admin::SensitiveMember,
+        MemberRole as ProtoRole, PreferredCommunications, SecondaryEmails, admin::SensitiveMember,
         get_member_request::Identifier,
     },
 };
@@ -93,6 +93,13 @@ fn preferences(values: Vec<StoredMethod>) -> Option<PreferredCommunications> {
     })
 }
 
+fn secondary_emails(emails: Vec<String>) -> Option<SecondaryEmails> {
+    if emails.is_empty() {
+        return None;
+    }
+    Some(SecondaryEmails { emails })
+}
+
 impl From<StoredMethod> for i32 {
     fn from(method: StoredMethod) -> Self {
         let method = match method {
@@ -137,6 +144,7 @@ impl From<BaseMember> for Member {
             grad_date: member.grad_date,
             role: member.role.map(|r| r.into()),
             preferred_communications: preferences(member.preferred_communications),
+            secondary_emails: secondary_emails(member.secondary_emails),
         }
     }
 }
@@ -162,6 +170,7 @@ impl From<BaseMember> for SensitiveMember {
             profile: member.profile,
             role: member.role.map(Into::into),
             preferred_communications: preferences(member.preferred_communications),
+            secondary_emails: secondary_emails(member.secondary_emails),
         }
     }
 }

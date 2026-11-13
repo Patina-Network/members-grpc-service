@@ -43,6 +43,7 @@ pub struct Member {
     pub profile: Option<String>,
     pub role: Option<MemberRole>,
     pub preferred_communications: Vec<CommunicationMethod>,
+    pub secondary_emails: Vec<String>,
     pub updated_at: DateTime<Utc>,
     pub archived_at: Option<DateTime<Utc>>,
 }
@@ -77,6 +78,7 @@ pub struct CreateMember {
     pub profile: Option<String>,
     pub role: Option<MemberRole>,
     pub preferred_communications: Option<Vec<CommunicationMethod>>,
+    pub secondary_emails: Option<Vec<String>>,
 }
 
 pub struct UpdateMember {
@@ -105,6 +107,8 @@ pub struct UpdateMember {
     pub role: Option<Option<MemberRole>>,
     /// None = unchanged; Some(empty) clears all preferences.
     pub preferred_communications: Option<Vec<CommunicationMethod>>,
+    /// None = unchanged; Some(empty) clears all secondary emails.
+    pub secondary_emails: Option<Vec<String>>,
 }
 
 #[derive(Clone)]
@@ -124,9 +128,6 @@ impl UpdateMember {
     pub fn apply(self, before: &Member) -> Result<Member, sqlx::Error> {
         let mut after = before.clone();
 
-        if let Some(email) = self.email {
-            after.email = email;
-        }
         if let Some(first_name) = self.first_name {
             after.first_name = first_name;
         }
@@ -178,6 +179,25 @@ impl UpdateMember {
             ));
         }
 
+        let emails_touched = self.email.is_some() || self.secondary_emails.is_some();
+        if let Some(email) = self.email {
+            after.email = email;
+        }
+        if let Some(secondary_emails) = self.secondary_emails {
+            let reordered = secondary_emails.len() == after.secondary_emails.len()
+                && secondary_emails
+                    .iter()
+                    .all(|email| after.secondary_emails.contains(email));
+            if !reordered {
+                after.secondary_emails = secondary_emails;
+            }
+        }
+        if emails_touched && after.secondary_emails.contains(&after.email) {
+            return Err(sqlx::Error::InvalidArgument(
+                "secondary_emails cannot contain the primary email".into(),
+            ));
+        }
+
         Ok(after)
     }
 }
@@ -212,6 +232,7 @@ impl UpsertWrite {
             profile: member.profile.map(Some),
             role: member.role.map(Some),
             preferred_communications: member.preferred_communications,
+            secondary_emails: member.secondary_emails,
         })
     }
 }
@@ -238,6 +259,7 @@ mod tests {
             profile: None,
             role: None,
             preferred_communications: vec![],
+            secondary_emails: vec![],
             updated_at: DateTime::UNIX_EPOCH,
             archived_at: None,
         }
@@ -260,6 +282,7 @@ mod tests {
             profile: None,
             role: None,
             preferred_communications: None,
+            secondary_emails: None,
         }
     }
 
@@ -284,6 +307,7 @@ mod tests {
             profile: None,
             role: None,
             preferred_communications: None,
+            secondary_emails: None,
         }
     }
 
@@ -418,6 +442,7 @@ mod tests {
                 profile: None,
                 role: None,
                 preferred_communications: None,
+                secondary_emails: None,
             }) if email == "a@example.org" && first_name == "First" && last_name == "Last"
         ));
 
@@ -429,6 +454,7 @@ mod tests {
             &UpsertWrite::new(with_career, Some(7)),
             UpsertWrite::Update(UpdateMember {
                 career: Some(Some(career)),
+                secondary_emails: None,
                 profile: None,
                 ..
             }) if career == "Engineer"
@@ -442,5 +468,123 @@ mod tests {
                 ..
             }) if id == "42" && name == "name"
         ));
+    }
+
+    #[test]
+    fn secondary_emails_keep_replace_or_clear() {
+        let mut before = member(None);
+        before.secondary_emails = vec!["old@example.org".into()];
+
+        let apply = |secondary_emails| {
+            UpdateMember {
+                secondary_emails,
+                ..update(None, None)
+            }
+            .apply(&before)
+            .unwrap()
+            .secondary_emails
+        };
+
+        assert_eq!(apply(None), ["old@example.org"]);
+        assert_eq!(
+            apply(Some(vec!["new@example.org".into()])),
+            ["new@example.org"]
+        );
+        assert!(apply(Some(vec![])).is_empty());
+    }
+
+    #[test]
+    fn rewriting_the_same_secondary_emails_is_unchanged() {
+        let mut before = member(None);
+        before.secondary_emails = vec!["b@example.org".into(), "c@example.org".into()];
+
+        for given in [
+            ["b@example.org", "c@example.org"],
+            ["c@example.org", "b@example.org"],
+        ] {
+            let after = UpdateMember {
+                secondary_emails: Some(given.map(String::from).to_vec()),
+                ..update(None, None)
+            }
+            .apply(&before)
+            .unwrap();
+
+            assert_eq!(after, before);
+        }
+    }
+
+    #[test]
+    fn upsert_only_replaces_secondary_emails_when_given() {
+        for given in [vec!["a2@example.org".to_string()], vec![]] {
+            let with_emails = CreateMember {
+                secondary_emails: Some(given.clone()),
+                ..create(None)
+            };
+            assert!(matches!(
+                UpsertWrite::new(with_emails, Some(7)),
+                UpsertWrite::Update(UpdateMember {
+                    secondary_emails: Some(emails),
+                    ..
+                }) if emails == given
+            ));
+        }
+        assert!(matches!(
+            UpsertWrite::new(create(None), Some(7)),
+            UpsertWrite::Update(UpdateMember {
+                secondary_emails: None,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn secondary_emails_never_contain_the_primary_email() {
+        let stored = |emails: &[&str]| Member {
+            secondary_emails: emails.iter().map(|e| e.to_string()).collect(),
+            ..member(None)
+        };
+        let list = |emails: &[&str]| Some(emails.iter().map(|e| e.to_string()).collect());
+
+        for (name, before, input, rejected) in [
+            (
+                "new primary is already a stored secondary",
+                stored(&["b@example.org"]),
+                UpdateMember {
+                    email: Some("b@example.org".into()),
+                    ..update(None, None)
+                },
+                true,
+            ),
+            (
+                "new list contains the stored primary",
+                stored(&[]),
+                UpdateMember {
+                    secondary_emails: list(&["a@example.org"]),
+                    ..update(None, None)
+                },
+                true,
+            ),
+            (
+                "promote: email leaves the list in the same request",
+                stored(&["b@example.org"]),
+                UpdateMember {
+                    email: Some("b@example.org".into()),
+                    secondary_emails: list(&["c@example.org"]),
+                    ..update(None, None)
+                },
+                false,
+            ),
+            (
+                "untouched email and list are not rechecked",
+                stored(&["a@example.org"]),
+                UpdateMember {
+                    first_name: Some("Other".into()),
+                    ..update(None, None)
+                },
+                false,
+            ),
+        ] {
+            assert_eq!(input.apply(&before).is_err(), rejected, "{name}");
+        }
     }
 }

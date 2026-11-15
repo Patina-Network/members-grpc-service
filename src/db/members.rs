@@ -10,7 +10,6 @@ use crate::domain::members::{
 
 struct MemberRow {
     id: i32,
-    email: String,
     first_name: String,
     last_name: String,
     joined_at: chrono::DateTime<Utc>,
@@ -32,7 +31,8 @@ impl From<MemberRow> for Member {
     fn from(row: MemberRow) -> Self {
         Self {
             id: row.id,
-            email: row.email,
+            // Filled from "UserEmails"
+            email: String::new(),
             first_name: row.first_name,
             last_name: row.last_name,
             joined_at: row.joined_at,
@@ -166,17 +166,17 @@ impl PgMembersRepository {
             .unwrap_or_default())
     }
 
-    /// Batch-loads non-primary emails for `member_ids`, keyed by member id.
-    /// Members without secondary emails are absent from the map.
-    async fn load_secondary_emails<'e, E>(
+    /// Batch-loads `(primary, secondaries)` emails for `member_ids`, keyed by
+    /// member id. Members without any email are absent from the map.
+    async fn load_emails<'e, E>(
         &self,
         member_ids: &[i32],
         executor: E,
-    ) -> Result<HashMap<i32, Vec<String>>, sqlx::Error>
+    ) -> Result<HashMap<i32, (String, Vec<String>)>, sqlx::Error>
     where
         E: sqlx::Executor<'e, Database = sqlx::Postgres>,
     {
-        let mut emails = HashMap::<i32, Vec<String>>::new();
+        let mut emails = HashMap::<i32, (String, Vec<String>)>::new();
         if member_ids.is_empty() {
             return Ok(emails);
         }
@@ -184,34 +184,39 @@ impl PgMembersRepository {
             r#"
             SELECT
                 "memberId" AS member_id,
-                email
+                email,
+                "isPrimary" AS is_primary
             FROM
                 "UserEmails"
             WHERE
                 "memberId" = ANY($1)
-                AND NOT "isPrimary"
             "#,
             member_ids,
         )
         .fetch_all(executor)
         .await?;
         for row in rows {
-            emails.entry(row.member_id).or_default().push(row.email);
+            let entry = emails.entry(row.member_id).or_default();
+            if row.is_primary {
+                entry.0 = row.email;
+            } else {
+                entry.1.push(row.email);
+            }
         }
         Ok(emails)
     }
 
-    /// Loads non-primary emails for a single member.
-    async fn load_member_secondary_emails<'e, E>(
+    /// Loads `(primary, secondaries)` emails for a single member.
+    async fn load_member_emails<'e, E>(
         &self,
         member_id: i32,
         executor: E,
-    ) -> Result<Vec<String>, sqlx::Error>
+    ) -> Result<(String, Vec<String>), sqlx::Error>
     where
         E: sqlx::Executor<'e, Database = sqlx::Postgres>,
     {
         Ok(self
-            .load_secondary_emails(&[member_id], executor)
+            .load_emails(&[member_id], executor)
             .await?
             .remove(&member_id)
             .unwrap_or_default())
@@ -305,7 +310,6 @@ impl PgMembersRepository {
             r#"
             SELECT
                 id,
-                email,
                 "firstName" AS first_name,
                 "lastName" AS last_name,
                 "joinedAt" AS joined_at,
@@ -334,9 +338,8 @@ impl PgMembersRepository {
         .into();
         before.preferred_communications =
             self.load_member_preferences(before.id, &mut **tx).await?;
-        before.secondary_emails = self
-            .load_member_secondary_emails(before.id, &mut **tx)
-            .await?;
+        (before.email, before.secondary_emails) =
+            self.load_member_emails(before.id, &mut **tx).await?;
 
         let after = input.apply(&before)?;
 
@@ -349,6 +352,7 @@ impl PgMembersRepository {
         }
 
         let preferences = after.preferred_communications.clone();
+        let email = after.email.clone();
         let secondary_emails = after.secondary_emails.clone();
         let mut after: Member = sqlx::query_as!(
             MemberRow,
@@ -356,26 +360,24 @@ impl PgMembersRepository {
             UPDATE
                 "Member"
             SET
-                email = $2,
-                "firstName" = $3,
-                "lastName" = $4,
-                "joinedAt" = $5,
-                "discordId" = $6,
-                "discordUsername" = $7,
-                "linkedinUsername" = $8,
-                "instagramUsername" = $9,
-                career = $10,
-                industry = $11,
-                profile = $12,
-                role = $13,
-                "updatedAt" = $14,
-                school = $15,
-                grad_date = $16
+                "firstName" = $2,
+                "lastName" = $3,
+                "joinedAt" = $4,
+                "discordId" = $5,
+                "discordUsername" = $6,
+                "linkedinUsername" = $7,
+                "instagramUsername" = $8,
+                career = $9,
+                industry = $10,
+                profile = $11,
+                role = $12,
+                "updatedAt" = $13,
+                school = $14,
+                grad_date = $15
             WHERE
                 id = $1
             RETURNING
                 id,
-                email,
                 "firstName" AS first_name,
                 "lastName" AS last_name,
                 "joinedAt" AS joined_at,
@@ -393,7 +395,6 @@ impl PgMembersRepository {
                 "archivedAt" AS archived_at
             "#,
             before.id,
-            after.email,
             after.first_name,
             after.last_name,
             after.joined_at,
@@ -436,7 +437,7 @@ impl PgMembersRepository {
             .execute(&mut **tx)
             .await?;
         }
-        if after.email != before.email {
+        if email != before.email {
             sqlx::query!(
                 r#"
                 DELETE FROM
@@ -449,9 +450,9 @@ impl PgMembersRepository {
             )
             .execute(&mut **tx)
             .await?;
-            self.insert_primary_email(tx, before.id, &after.email)
-                .await?;
+            self.insert_primary_email(tx, before.id, &email).await?;
         }
+        after.email = email;
         if secondaries_changed && !secondary_emails.is_empty() {
             self.insert_secondary_emails(tx, before.id, &secondary_emails)
                 .await?;
@@ -479,7 +480,6 @@ impl PgMembersRepository {
                 AND "archivedAt" IS NULL
             RETURNING
                 id,
-                email,
                 "firstName" AS first_name,
                 "lastName" AS last_name,
                 "joinedAt" AS joined_at,
@@ -508,7 +508,6 @@ impl PgMembersRepository {
                 r#"
                 SELECT
                     id,
-                    email,
                     "firstName" AS first_name,
                     "lastName" AS last_name,
                     "joinedAt" AS joined_at,
@@ -538,18 +537,16 @@ impl PgMembersRepository {
             existing.preferred_communications = self
                 .load_member_preferences(existing.id, &self.pool)
                 .await?;
-            existing.secondary_emails = self
-                .load_member_secondary_emails(existing.id, &self.pool)
-                .await?;
+            (existing.email, existing.secondary_emails) =
+                self.load_member_emails(existing.id, &self.pool).await?;
             return Ok((existing, false));
         };
 
         let mut stored: Member = stored.into();
         stored.preferred_communications =
             self.load_member_preferences(stored.id, &self.pool).await?;
-        stored.secondary_emails = self
-            .load_member_secondary_emails(stored.id, &self.pool)
-            .await?;
+        (stored.email, stored.secondary_emails) =
+            self.load_member_emails(stored.id, &self.pool).await?;
         Ok((stored, true))
     }
 }
@@ -563,7 +560,6 @@ impl MembersRepository for PgMembersRepository {
                     r#"
                     SELECT
                         id,
-                        email,
                         "firstName" AS first_name,
                         "lastName" AS last_name,
                         "joinedAt" AS joined_at,
@@ -595,7 +591,6 @@ impl MembersRepository for PgMembersRepository {
                     r#"
                     SELECT
                         id,
-                        email,
                         "firstName" AS first_name,
                         "lastName" AS last_name,
                         "joinedAt" AS joined_at,
@@ -614,7 +609,15 @@ impl MembersRepository for PgMembersRepository {
                     FROM
                         "Member"
                     WHERE
-                        email = $1
+                        id = (
+                            SELECT
+                                "memberId"
+                            FROM
+                                "UserEmails"
+                            WHERE
+                                email = $1
+                                AND "isPrimary"
+                        )
                     "#,
                     email
                 )
@@ -627,7 +630,6 @@ impl MembersRepository for PgMembersRepository {
                     r#"
                     SELECT
                         id,
-                        email,
                         "firstName" AS first_name,
                         "lastName" AS last_name,
                         "joinedAt" AS joined_at,
@@ -658,9 +660,8 @@ impl MembersRepository for PgMembersRepository {
         if let Some(member) = &mut member {
             member.preferred_communications =
                 self.load_member_preferences(member.id, &self.pool).await?;
-            member.secondary_emails = self
-                .load_member_secondary_emails(member.id, &self.pool)
-                .await?;
+            (member.email, member.secondary_emails) =
+                self.load_member_emails(member.id, &self.pool).await?;
         }
         Ok(member)
     }
@@ -676,7 +677,6 @@ impl MembersRepository for PgMembersRepository {
             r#"
             SELECT
                 id,
-                email,
                 "firstName" AS first_name,
                 "lastName" AS last_name,
                 "joinedAt" AS joined_at,
@@ -711,10 +711,10 @@ impl MembersRepository for PgMembersRepository {
         let mut members: Vec<Member> = rows.into_iter().map(Into::into).collect();
         let ids: Vec<i32> = members.iter().map(|member| member.id).collect();
         let mut preferences = self.load_preferences(&ids, &self.pool).await?;
-        let mut secondary_emails = self.load_secondary_emails(&ids, &self.pool).await?;
+        let mut emails = self.load_emails(&ids, &self.pool).await?;
         for member in &mut members {
             member.preferred_communications = preferences.remove(&member.id).unwrap_or_default();
-            member.secondary_emails = secondary_emails.remove(&member.id).unwrap_or_default();
+            (member.email, member.secondary_emails) = emails.remove(&member.id).unwrap_or_default();
         }
         Ok(members)
     }
@@ -729,13 +729,12 @@ impl MembersRepository for PgMembersRepository {
             MemberRow,
             r#"
             INSERT INTO "Member"
-                (email, "firstName", "lastName", "joinedAt", "discordId", "discordUsername",
+                ("firstName", "lastName", "joinedAt", "discordId", "discordUsername",
                  "linkedinUsername", "instagramUsername", career, industry, profile, role, "updatedAt", school, grad_date)
             VALUES
-                ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
             RETURNING
                 id,
-                email,
                 "firstName" AS first_name,
                 "lastName" AS last_name,
                 "joinedAt" AS joined_at,
@@ -752,7 +751,6 @@ impl MembersRepository for PgMembersRepository {
                 "updatedAt" AS updated_at,
                 "archivedAt" AS archived_at
             "#,
-            input.email,
             input.first_name,
             input.last_name,
             input.joined_at.unwrap_or(now),
@@ -776,8 +774,9 @@ impl MembersRepository for PgMembersRepository {
                 .await?;
         }
         member.preferred_communications = preferences;
-        self.insert_primary_email(&mut tx, member.id, &member.email)
+        self.insert_primary_email(&mut tx, member.id, &input.email)
             .await?;
+        member.email = input.email;
         if !secondary_emails.is_empty() {
             self.insert_secondary_emails(&mut tx, member.id, &secondary_emails)
                 .await?;

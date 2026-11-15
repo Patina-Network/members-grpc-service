@@ -20,6 +20,7 @@ pub fn database_status(error: sqlx::Error) -> Status {
                 Some("Member_discordId_key") => "discord_id already exists",
                 Some("Member_linkedinUsername_key") => "linkedin_username already exists",
                 Some("Member_instagramUsername_key") => "instagram_username already exists",
+                Some("UserEmails_email_key") => "user email already exists",
                 _ => "record already exists",
             })
         }
@@ -159,6 +160,7 @@ mod tests {
                 "instagram_username already exists",
             ),
             ("Other_key", "record already exists"),
+            ("UserEmails_email_key", "user email already exists"),
         ] {
             let status =
                 database_status(sqlx::Error::Database(Box::new(UniqueViolation(constraint))));

@@ -327,6 +327,7 @@ mod tests {
             preferred_communications: vec![],
             updated_at: DateTime::UNIX_EPOCH,
             archived_at: (id == 3).then_some(DateTime::UNIX_EPOCH),
+            secondary_emails: vec![format!("secondary{id}@example.org")],
         }
     }
 

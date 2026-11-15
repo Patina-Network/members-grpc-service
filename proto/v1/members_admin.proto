@@ -50,6 +50,9 @@ message SensitiveMember {
   // Unset when the member has no stored preferences; never returned as an
   // empty `values` list.
   optional members.PreferredCommunications preferred_communications = 18;
+  // Unset when the member has no secondary emails; never returned as an
+  // empty `emails` list.
+  optional members.SecondaryEmails secondary_emails = 19;
 }
 
 message GetSensitiveMemberResponse { SensitiveMember member = 1; }
@@ -79,6 +82,8 @@ message CreateMemberRequest {
   optional string grad_date = 14;
   // Unset or empty `values` = no preferences stored.
   optional members.PreferredCommunications preferred_communications = 15;
+  // Unset or empty `emails` = no secondary emails stored.
+  optional members.SecondaryEmails secondary_emails = 16;
 }
 
 message CreateMemberResponse { SensitiveMember member = 1; }
@@ -110,6 +115,8 @@ message UpdateMemberRequest {
   optional string grad_date = 15;
   // Absent = unchanged; present with empty values = clear; otherwise replace.
   optional members.PreferredCommunications preferred_communications = 16;
+  // Absent = unchanged; present with empty emails = clear; otherwise replace.
+  optional members.SecondaryEmails secondary_emails = 17;
 }
 
 message UpdateMemberResponse { SensitiveMember member = 1; }

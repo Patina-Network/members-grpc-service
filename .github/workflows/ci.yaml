@@ -46,6 +46,8 @@ jobs:
         with:
           LINT_CI: true
           SECRETS: ${{ toJSON(secrets) }}
+          INSTALL_RUST: true
+          RUST_COMPONENTS: clippy
           INSTALL_JUST: true
           INSTALL_PROTOC: true
           INSTALL_MIGRATE: "true"
@@ -77,6 +79,7 @@ jobs:
           HEADSCALE_ADDRESS: ${{ secrets.HEADSCALE_ADDRESS }}
           HEADSCALE_USER: ${{ secrets.HEADSCALE_USER }}
           HEADSCALE_PREAUTHKEY: ${{ secrets.HEADSCALE_PREAUTHKEY }}
+          INSTALL_RUST: true
           INSTALL_PROTO_DEPENDENCIES: true
           INSTALL_JUST: true
           INSTALL_MIGRATE: "true"
@@ -120,6 +123,7 @@ jobs:
           HEADSCALE_ADDRESS: ${{ secrets.HEADSCALE_ADDRESS }}
           HEADSCALE_USER: ${{ secrets.HEADSCALE_USER }}
           HEADSCALE_PREAUTHKEY: ${{ secrets.HEADSCALE_PREAUTHKEY }}
+          INSTALL_RUST: true
           INSTALL_PROTO_DEPENDENCIES: true
           INSTALL_JUST: true
           INSTALL_MIGRATE: "true"
@@ -188,6 +192,7 @@ jobs:
         uses: tahminator/pipeline/actions/setup@aa4f2ffcca89a9dcad96c1eac1e57b5a533f8c26 # 1.0.100
         with:
           LINT_CI: true
+          INSTALL_RUST: true
           INSTALL_PROTO_DEPENDENCIES: true
           INSTALL_JUST: true
           INSTALL_MIGRATE: "true"

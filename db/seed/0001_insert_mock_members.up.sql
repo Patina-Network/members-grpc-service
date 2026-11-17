@@ -1,5 +1,4 @@
 INSERT INTO "Member" (
-    email,
     "firstName",
     "lastName",
     "joinedAt",
@@ -9,7 +8,6 @@ INSERT INTO "Member" (
     "archivedAt"
 ) VALUES
     (
-        'member1@example.com',
         'Member',
         'One',
         '2026-01-02T03:04:05.123456Z',
@@ -19,7 +17,6 @@ INSERT INTO "Member" (
         NULL
     ),
     (
-        'member2@example.com',
         'Member',
         'Two',
         '2026-01-03T03:04:05Z',
@@ -29,7 +26,6 @@ INSERT INTO "Member" (
         NULL
     ),
     (
-        'member3@example.com',
         'Member',
         'Three',
         '2026-01-04T03:04:05Z',
@@ -39,7 +35,6 @@ INSERT INTO "Member" (
         NULL
     ),
     (
-        'member4@example.com',
         'Member',
         'Four',
         '2026-01-05T03:04:05Z',
@@ -49,7 +44,6 @@ INSERT INTO "Member" (
         NULL
     ),
     (
-        'member5@example.com',
         'Member',
         'Five',
         '2026-01-06T03:04:05Z',
@@ -58,5 +52,4 @@ INSERT INTO "Member" (
         '2026-02-07T04:05:06Z',
         '2026-03-04T05:06:07Z'
     )
-ON CONFLICT (email) DO UPDATE SET
-    "discordId" = EXCLUDED."discordId";
+ON CONFLICT ("discordId") DO NOTHING;

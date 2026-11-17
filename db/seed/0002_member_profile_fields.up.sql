@@ -5,10 +5,10 @@ UPDATE "Member" AS m SET
     industry = v.industry,
     profile = v.profile
 FROM (VALUES
-    ('member1@example.com', 'member-one', 'member.one', 'Software Engineer', 'Technology', 'Mentor for new members.'),
-    ('member2@example.com', 'member-two', NULL, 'Software Engineer', 'Finance', NULL),
-    ('member3@example.com', NULL, 'member.three', 'Product Manager', 'Technology', NULL),
-    ('member4@example.com', 'member-four', NULL, 'Data Scientist', 'Healthcare', NULL),
-    ('member5@example.com', NULL, NULL, 'Product Manager', 'Technology', NULL)
-) AS v (email, linkedin_username, instagram_username, career, industry, profile)
-WHERE m.email = v.email;
+    ('100000000000000001', 'member-one', 'member.one', 'Software Engineer', 'Technology', 'Mentor for new members.'),
+    ('100000000000000002', 'member-two', NULL, 'Software Engineer', 'Finance', NULL),
+    ('100000000000000003', NULL, 'member.three', 'Product Manager', 'Technology', NULL),
+    ('100000000000000004', 'member-four', NULL, 'Data Scientist', 'Healthcare', NULL),
+    ('100000000000000005', NULL, NULL, 'Product Manager', 'Technology', NULL)
+) AS v (discord_id, linkedin_username, instagram_username, career, industry, profile)
+WHERE m."discordId" = v.discord_id;

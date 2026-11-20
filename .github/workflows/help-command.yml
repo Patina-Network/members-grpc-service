@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/SchemaStore/schemastore/refs/heads/master/src/schemas/json/github-workflow.json
+name: PR Help Comment
+run-name: PR Help Comment
+
+on:
+  pull_request:
+    types: [opened]
+
+permissions:
+  contents: read
+
+jobs:
+  prHelpComment:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    name: PR Help Comment
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Pipeline
+        uses: tahminator/pipeline/actions/setup@aa4f2ffcca89a9dcad96c1eac1e57b5a533f8c26 # 1.0.100
+        with:
+          LINT_CI: true
+
+      - name: Post available PR commands
+        env:
+          PR_ID: ${{ github.event.pull_request.number }}
+          _GITHUB_APP_APP_ID: ${{ secrets._GITHUB_APP_APP_ID }}
+          _GITHUB_APP_INSTALLATION_ID: ${{ secrets._GITHUB_APP_INSTALLATION_ID }}
+          _GITHUB_APP_PEM_CONTENT: ${{ secrets._GITHUB_APP_PEM_CONTENT }}
+        run: bun run .github/scripts/src/help-message --prId="$PR_ID"

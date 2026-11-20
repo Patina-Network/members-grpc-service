@@ -77,10 +77,16 @@ from GitHub and runs the team check from the default branch. It then applies onl
 the pull request's `db/` files to `members-stg`, and skips the database when `db/`
 did not change. The command runs only after this workflow is on the default branch.
 
-Cargo uses SQLx offline mode by default, so builds, tests, and linting need no
-running database. After changing SQL or migrations, run `just sqlx-prepare-local`
-(with sqlx-cli 0.9.0 installed) to refresh the local, ignored `.sqlx` cache.
-Do not commit `.sqlx`; CI starts a fresh
+Local builds use SQLx online mode: the query macros read `DATABASE_URL` from
+`.env` and check every query against your local database, so it must be running
+and migrated (`just migrate`) before `cargo build`, `cargo test`, or `just lint`.
+`DATABASE_URL` is assembled from the `DATABASE_*` values; percent-encode the
+password if it contains URL-reserved characters. Set `SQLX_OFFLINE=true` in your
+shell to build from a local `.sqlx` cache instead.
+
+Image builds run offline from `.sqlx`. To build the image locally, first run
+`just sqlx-prepare-local` (with sqlx-cli 0.9.0 installed) to generate the ignored
+`.sqlx` cache. Do not commit `.sqlx`; CI starts a fresh
 `LocalPostgresClient`, applies `db/all`, generates the ignored SQLx metadata with
 `cargo sqlx prepare`, and runs Rust checks with `SQLX_OFFLINE=false`.
 Image builds depend on that validation and use the validated offline cache.

@@ -6,7 +6,7 @@ gRPC service that owns Patina Network member records.
 - `proto/v1/members_admin.proto`: `members.admin.MembersAdminService`, single and bulk write operations for core-admin only + read lookups for admin-only/sensitive fields.
 
 Both services ship in a single generated client package (`members-grpc-service`).
-
+ 
 ## Quickstart
 
 Requires Rust 1.94 or newer.

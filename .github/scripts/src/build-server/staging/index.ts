@@ -58,6 +58,7 @@ async function main() {
     prId,
     owner: GITHUB_OWNER,
     repository: GITHUB_REPOSITORY,
+    key: `grpc-server-build-${arch}`,
     message: `The gRPC server image has been uploaded to https://hub.docker.com/r/${image}/tags under the following tags:
 
 ${tags.map((t) => `- \`${repository}:${t}\``).join("\n")}
